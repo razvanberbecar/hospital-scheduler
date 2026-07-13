@@ -1,0 +1,39 @@
+# Dev profile: Postgres + backend with hot reload on :8000; run the frontend
+# natively with `npm run dev` (vite proxies /api to localhost:8000).
+#
+#   docker compose -f docker-compose.dev.yml up --build
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hospital
+      POSTGRES_PASSWORD: hospital
+      POSTGRES_DB: hospital
+    ports:
+      - "5432:5432"
+    volumes:
+      - hs_dev_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hospital -d hospital"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      HS_DATABASE_URL: postgresql+psycopg://hospital:hospital@db:5432/hospital
+      HS_JWT_SECRET: dev-secret-change-me
+      HS_CORS_ORIGINS: http://localhost:5173
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  hs_dev_pgdata:

@@ -1,0 +1,51 @@
+# Production profile (plan section 2): one command brings up Postgres, the API
+# and the static frontend behind nginx (proxying /api).
+#
+#   HS_JWT_SECRET=$(openssl rand -hex 32) docker compose up -d --build
+#   docker compose exec backend python -m app.manage create-manager \
+#       --username anca.berbecar --name "Berbecar Anca" --section SMALL
+#
+# Postgres is published on 5432 so you can connect with a DB tool from the
+# host: postgresql://hospital:${HS_DB_PASSWORD:-hospital}@localhost:5432/hospital
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hospital
+      POSTGRES_PASSWORD: ${HS_DB_PASSWORD:-hospital}
+      POSTGRES_DB: hospital
+    ports:
+      - "5432:5432"
+    volumes:
+      - hs_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hospital -d hospital"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      HS_DATABASE_URL: postgresql+psycopg://hospital:${HS_DB_PASSWORD:-hospital}@db:5432/hospital
+      HS_JWT_SECRET: ${HS_JWT_SECRET:?set HS_JWT_SECRET in the environment}
+      HS_CORS_ORIGINS: ""
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  hs_pgdata:

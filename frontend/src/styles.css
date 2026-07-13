@@ -1,0 +1,829 @@
+:root {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #1c1c1c;
+  background: #f6f6f4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.card {
+  max-width: 380px;
+  margin: 12vh auto 0;
+  background: #fff;
+  border: 1px solid #e2e2de;
+  border-radius: 10px;
+  padding: 28px;
+}
+
+.card h1 {
+  font-size: 20px;
+  margin: 0 0 4px;
+}
+
+.hint {
+  color: #6b6b66;
+  font-size: 13px;
+  margin: 0 0 16px;
+}
+
+label {
+  display: block;
+  font-size: 13px;
+  color: #4a4a46;
+  margin: 12px 0 4px;
+}
+
+input {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid #cfcfc9;
+  border-radius: 6px;
+  font-size: 15px;
+}
+
+button {
+  margin-top: 18px;
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: 6px;
+  background: #16528e;
+  color: #fff;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #fff;
+  color: #16528e;
+  border: 1px solid #16528e;
+}
+
+button.danger {
+  background: #fff;
+  color: #b3261e;
+  border: 1px solid #b3261e;
+}
+
+.error {
+  color: #b3261e;
+  font-size: 13px;
+  margin: 10px 0 0;
+}
+
+.lang {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  display: flex;
+  gap: 6px;
+}
+
+.lang button {
+  margin: 0;
+  width: auto;
+  padding: 4px 10px;
+  font-size: 13px;
+  background: #fff;
+  color: #4a4a46;
+  border: 1px solid #cfcfc9;
+}
+
+.lang button.active {
+  border-color: #16528e;
+  color: #16528e;
+}
+
+/* =========================================================================
+   App shell (M4)
+   ========================================================================= */
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 20px;
+  height: 52px;
+  background: #16528e;
+  color: #fff;
+}
+
+.topbar-left,
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.brand {
+  font-weight: 600;
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+.nav-links {
+  display: flex;
+  gap: 14px;
+}
+
+.nav-link {
+  color: #d5e3f2;
+  text-decoration: none;
+  font-size: 14px;
+  padding: 4px 2px;
+  border-bottom: 2px solid transparent;
+}
+
+.nav-link:hover {
+  color: #fff;
+}
+
+.nav-link.active {
+  color: #fff;
+  border-bottom-color: #fff;
+}
+
+.me-name {
+  font-size: 14px;
+  color: #eaf1f9;
+  white-space: nowrap;
+}
+
+/* The topbar swallows the fixed LangSwitcher into the bar. */
+.topbar .lang {
+  position: static;
+}
+
+.topbar .lang button {
+  background: transparent;
+  color: #d5e3f2;
+  border-color: #5b86b6;
+}
+
+.topbar .lang button.active {
+  color: #fff;
+  border-color: #fff;
+}
+
+.app-main {
+  padding: 22px;
+}
+
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.page h1 {
+  font-size: 22px;
+  margin: 0 0 16px;
+}
+
+.page h2 {
+  font-size: 17px;
+  margin: 0 0 12px;
+}
+
+/* Buttons inside the app shell are inline-sized, not full width. */
+.app-shell button {
+  width: auto;
+  margin-top: 0;
+  padding: 8px 14px;
+  font-size: 14px;
+}
+
+.app-shell button.small {
+  padding: 5px 10px;
+  font-size: 13px;
+}
+
+.app-shell button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.link-button {
+  background: none !important;
+  border: none;
+  color: #16528e;
+  padding: 4px 2px !important;
+  width: auto;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.topbar .link-button {
+  color: #eaf1f9;
+}
+
+.link-button.danger {
+  color: #b3261e;
+}
+
+.link-button:disabled {
+  color: #b7c0cb;
+  cursor: default;
+}
+
+.order-cell {
+  white-space: nowrap;
+}
+
+.order-cell .link-button {
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 3px !important;
+}
+
+.btn-link {
+  display: inline-block;
+  padding: 8px 14px;
+  border: 1px solid #16528e;
+  border-radius: 6px;
+  color: #16528e;
+  text-decoration: none;
+  font-size: 14px;
+  background: #fff;
+}
+
+/* =========================================================================
+   Panels, cards, forms
+   ========================================================================= */
+
+.panel,
+.card-inline {
+  background: #fff;
+  border: 1px solid #e2e2de;
+  border-radius: 10px;
+  padding: 18px;
+  margin: 0 0 18px;
+}
+
+.card-inline h2,
+.panel h2 {
+  margin-top: 0;
+}
+
+.form-row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-end;
+  flex-wrap: nowrap;
+}
+
+.form-row.wrap {
+  flex-wrap: wrap;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+}
+
+.field label {
+  margin-top: 0;
+}
+
+.field input,
+.field select {
+  min-width: 120px;
+}
+
+.field-action {
+  justify-content: flex-end;
+}
+
+.checkbox-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #333;
+  margin: 8px 0 0;
+}
+
+.checkbox-line input {
+  width: auto;
+}
+
+.checkbox-line.inline {
+  margin: 0;
+}
+
+select {
+  padding: 8px 10px;
+  border: 1px solid #cfcfc9;
+  border-radius: 6px;
+  font-size: 14px;
+  background: #fff;
+}
+
+/* =========================================================================
+   Data tables
+   ========================================================================= */
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.data-table.narrow {
+  max-width: 420px;
+}
+
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid #ececea;
+}
+
+.data-table th {
+  color: #5a5a55;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.data-table tr.muted td {
+  color: #9a9a95;
+}
+
+.data-table input,
+.data-table select {
+  width: auto;
+  min-width: 90px;
+}
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.row-selected td,
+.editing-row td {
+  background: #eef4fb;
+}
+
+/* =========================================================================
+   Badges
+   ========================================================================= */
+
+.badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.badge-draft {
+  background: #eee6cf;
+  color: #806413;
+}
+
+.badge-approved {
+  background: #d6ecd8;
+  color: #256b2b;
+}
+
+.badge-locked {
+  background: #e2e3e5;
+  color: #4a4d52;
+}
+
+/* =========================================================================
+   Banners, modal, secrets
+   ========================================================================= */
+
+.banner {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: flex-start;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 0 0 16px;
+  font-size: 14px;
+}
+
+.banner-info {
+  background: #eaf1f9;
+  border: 1px solid #b9d1ea;
+}
+
+.banner-success {
+  background: #e5f3e6;
+  border: 1px solid #b6ddb9;
+}
+
+.banner-error {
+  background: #fbe9e7;
+  border: 1px solid #f1b5ad;
+  color: #7a1c15;
+}
+
+.banner-body {
+  flex: 1;
+}
+
+.banner-body p {
+  margin: 0 0 6px;
+}
+
+.banner-dismiss {
+  flex: 0 0 auto;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.modal {
+  background: #fff;
+  border-radius: 10px;
+  padding: 22px;
+  max-width: 440px;
+  width: 90%;
+}
+
+.modal h3 {
+  margin: 0 0 10px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.secret-box {
+  background: #fff;
+  border: 1px dashed #256b2b;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 6px 0;
+}
+
+.secret-label {
+  font-size: 13px;
+  color: #333;
+  margin-bottom: 6px;
+}
+
+.secret-value {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #16528e;
+}
+
+/* =========================================================================
+   Schedule grid
+   ========================================================================= */
+
+.grid-scroll {
+  overflow-x: auto;
+  border: 1px solid #e2e2de;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.grid {
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.grid th,
+.grid td {
+  border: 1px solid #e4e4e0;
+  padding: 3px 5px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.grid .name-col {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #fff;
+  text-align: left;
+  min-width: 170px;
+  font-size: 13px;
+}
+
+.grid thead .name-col {
+  z-index: 3;
+  background: #f4f4f2;
+}
+
+.grid .day-col {
+  min-width: 26px;
+  background: #f4f4f2;
+  color: #555;
+}
+
+.grid .day-col.wd {
+  font-size: 10px;
+  color: #888;
+  font-weight: 400;
+}
+
+.grid .tot-col {
+  min-width: 42px;
+  background: #f4f4f2;
+  color: #444;
+  font-size: 11px;
+}
+
+.grid tbody .tot-col {
+  background: #fbfbfa;
+  font-weight: 600;
+}
+
+.grid .tot-col.muted {
+  color: #b5b5b0;
+  font-weight: 400;
+}
+
+.col-weekend {
+  background: #ececea !important;
+}
+
+.col-holiday {
+  background: #f7e2e7 !important;
+}
+
+.section-row td {
+  background: #eef2f7;
+  font-weight: 600;
+  color: #16528e;
+  border-top: 2px solid #cdd9e6;
+}
+
+.section-label {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+}
+
+.grid .cell {
+  height: 24px;
+}
+
+.cell.clickable {
+  cursor: pointer;
+}
+
+.cell.clickable:hover {
+  outline: 2px solid #16528e;
+  outline-offset: -2px;
+}
+
+.active-cell {
+  outline: 2px solid #16528e;
+  outline-offset: -2px;
+}
+
+.lock-mark {
+  color: #b3261e;
+  font-size: 9px;
+  margin-left: 1px;
+}
+
+/* Cell tints by shift kind. */
+.c-z {
+  background: #eaf1f9;
+}
+.c-n {
+  background: #d9dde6;
+  color: #2a2f3a;
+}
+.c-k {
+  background: #e2f0e0;
+}
+.c-h {
+  background: #dbe7f5;
+}
+.c-t {
+  background: #fbead2;
+}
+.c-co {
+  background: #fbf3cf;
+}
+
+.coverage-row td {
+  border-top: 2px solid #cdd9e6;
+  font-weight: 600;
+  color: #444;
+}
+
+.coverage-label {
+  text-align: left;
+}
+
+.coverage-bad {
+  background: #fbdcd7 !important;
+  color: #a3241b;
+}
+
+/* =========================================================================
+   Legend
+   ========================================================================= */
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 12px 0 18px;
+  font-size: 13px;
+  color: #555;
+  align-items: center;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  border: 1px solid #d8d8d3;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* =========================================================================
+   Cell editor
+   ========================================================================= */
+
+.cell-editor {
+  position: sticky;
+  bottom: 0;
+  background: #fff;
+  border: 1px solid #16528e;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 10px 0 16px;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.06);
+}
+
+.cell-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.cell-editor-head .hint {
+  margin: 0;
+}
+
+.cell-editor-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip {
+  width: auto;
+  padding: 6px 12px;
+  border: 1px solid #16528e;
+  border-radius: 6px;
+  background: #fff;
+  color: #16528e;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.chip.danger {
+  border-color: #b3261e;
+  color: #b3261e;
+}
+
+.chip.static {
+  cursor: default;
+  border-color: #cfcfc9;
+  color: #444;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.chip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tail-nurse {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.tail-name {
+  font-size: 13px;
+  color: #444;
+  min-width: 160px;
+}
+
+/* =========================================================================
+   Action areas, misc
+   ========================================================================= */
+
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.detail-header h1 {
+  margin: 0;
+}
+
+.action-area {
+  margin: 0 0 12px;
+}
+
+.action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+
+.sticky-save {
+  position: sticky;
+  bottom: 0;
+  background: #f6f6f4;
+  padding: 12px 0;
+  border-top: 1px solid #e2e2de;
+}
+
+.issue-list {
+  margin: 6px 0;
+  padding-left: 20px;
+  font-size: 13px;
+}
+
+.issue-violation {
+  color: #a3241b;
+}
+
+.issue-warning {
+  color: #8a6d1a;
+}
+
+.solver-report p {
+  margin: 4px 0;
+}
+
+.new-month .form-row {
+  flex-wrap: wrap;
+}
+
+.year-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.year-input {
+  width: 90px;
+  text-align: center;
+}
+
+.setup-matrix .cell {
+  min-width: 26px;
+}
