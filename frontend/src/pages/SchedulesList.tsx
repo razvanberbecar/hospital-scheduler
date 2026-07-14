@@ -3,9 +3,10 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { ApiError, createSchedule, getHolidays, listSchedules, listUsers } from "../api/client";
-import type { ScheduleListItem } from "../api/types";
+import type { ScheduleListItem, StaffType } from "../api/types";
 import { useUser } from "../context/UserContext";
 import { monthYearLabel, nextMonth, suggestedTarget } from "../lib/dates";
+import { staffTypePlural } from "../lib/schedule";
 import { Banner, StatusBadge } from "../components/ui";
 
 export default function SchedulesList() {
@@ -16,6 +17,11 @@ export default function SchedulesList() {
 
   const [rows, setRows] = useState<ScheduleListItem[] | null>(null);
   const [error, setError] = useState("");
+  // Managers switch between the two independent schedule lists via tabs; a
+  // nurse/infirmiera only ever sees her own staff type, so the tab is fixed.
+  const [staffTab, setStaffTab] = useState<StaffType>(
+    me?.staff_type === "infirmiera" ? "infirmiera" : "asistenta",
+  );
 
   async function load() {
     try {
@@ -30,28 +36,51 @@ export default function SchedulesList() {
     void load();
   }, []);
 
-  // Default new-month = the month after the latest listed schedule, else current.
+  const shownRows = useMemo(
+    () => (rows ?? []).filter((s) => s.staff_type === staffTab),
+    [rows, staffTab],
+  );
+
+  // Default new-month = the month after the latest listed schedule of this
+  // staff type, else current.
   const defaultYM = useMemo(() => {
-    if (rows && rows.length > 0) {
-      const latest = rows.reduce((a, b) =>
+    if (shownRows.length > 0) {
+      const latest = shownRows.reduce((a, b) =>
         a.year > b.year || (a.year === b.year && a.month > b.month) ? a : b,
       );
       return nextMonth(latest.year, latest.month);
     }
     const now = new Date();
     return { year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 };
-  }, [rows]);
+  }, [shownRows]);
 
   return (
     <div className="page">
       <h1>{t("schedules.title")}</h1>
       {error && <Banner tone="error">{error}</Banner>}
 
-      {isManager && <NewMonthForm defaultYM={defaultYM} />}
+      {isManager && (
+        <div className="tab-bar" role="tablist">
+          {(["asistenta", "infirmiera"] as StaffType[]).map((st) => (
+            <button
+              key={st}
+              type="button"
+              role="tab"
+              aria-selected={staffTab === st}
+              className={`tab ${staffTab === st ? "active" : ""}`}
+              onClick={() => setStaffTab(st)}
+            >
+              {staffTypePlural(st, t)}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {isManager && <NewMonthForm defaultYM={defaultYM} staffType={staffTab} />}
 
       {rows === null ? (
         <p className="hint">{t("common.loading")}</p>
-      ) : rows.length === 0 ? (
+      ) : shownRows.length === 0 ? (
         <p className="hint">{t("schedules.empty")}</p>
       ) : (
         <table className="data-table">
@@ -65,7 +94,7 @@ export default function SchedulesList() {
             </tr>
           </thead>
           <tbody>
-            {[...rows]
+            {[...shownRows]
               .sort((a, b) => b.year - a.year || b.month - a.month)
               .map((s) => (
                 <tr key={s.id}>
@@ -93,7 +122,13 @@ export default function SchedulesList() {
   );
 }
 
-function NewMonthForm({ defaultYM }: { defaultYM: { year: number; month: number } }) {
+function NewMonthForm({
+  defaultYM,
+  staffType,
+}: {
+  defaultYM: { year: number; month: number };
+  staffType: StaffType;
+}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [year, setYear] = useState(defaultYM.year);
@@ -131,10 +166,12 @@ function NewMonthForm({ defaultYM }: { defaultYM: { year: number; month: number 
     setBusy(true);
     try {
       const users = await listUsers();
-      const active = users.filter((u) => u.active);
+      // Only roster users of this schedule's staff type (the backend enforces it too).
+      const active = users.filter((u) => u.active && u.staff_type === staffType);
       const detail = await createSchedule({
         year,
         month,
+        staff_type: staffType,
         target_hours: typeof target === "number" ? target : 0,
         roster: active.map((u) => ({ user_id: u.id, kitchen_capable: null })),
         days_off: [],
@@ -152,7 +189,9 @@ function NewMonthForm({ defaultYM }: { defaultYM: { year: number; month: number 
 
   return (
     <form className="card-inline new-month" onSubmit={onSubmit}>
-      <h2>{t("schedules.newTitle")}</h2>
+      <h2>
+        {t("schedules.newTitle")} · {staffTypePlural(staffType, t)}
+      </h2>
       <div className="form-row">
         <div className="field">
           <label htmlFor="nm-year">{t("schedules.year")}</label>

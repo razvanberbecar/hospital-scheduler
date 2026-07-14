@@ -14,13 +14,14 @@ def make_settings(tmp_path, **overrides) -> Settings:
         jwt_secret="test-secret",
         bcrypt_rounds=4,
         login_rate_per_minute=1000,
+        seed_default_staff=False,  # keep the empty-DB assumption for API tests
     )
     defaults.update(overrides)
     return Settings(**defaults)
 
 
 def add_user(app, username, *, password=TEST_PASSWORD, role="nurse", section="BIG",
-             must_change=False, kitchen=False, active=True) -> int:
+             staff_type="asistenta", must_change=False, kitchen=False, active=True) -> int:
     session = app.state.sessionmaker()
     try:
         user = User(
@@ -29,6 +30,7 @@ def add_user(app, username, *, password=TEST_PASSWORD, role="nurse", section="BI
             must_change_password=must_change,
             full_name=username.replace(".", " ").title(),
             role=role,
+            staff_type=staff_type,
             section=section,
             default_kitchen_capable=kitchen,
             active=active,

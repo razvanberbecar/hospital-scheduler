@@ -42,6 +42,12 @@
     "nurse": "asistentă",
     "manager": "asistentă șefă"
   },
+  "staff": {
+    "asistenta": "Asistentă",
+    "infirmiera": "Infirmieră",
+    "asistentePlural": "Asistente",
+    "infirmierePlural": "Infirmiere"
+  },
   "status": {
     "draft": "Ciornă",
     "approved": "Aprobat",
@@ -96,13 +102,17 @@
     "daySmall": "Zi (Sugari)",
     "nightBig": "Noapte (Copii Mari)",
     "nightSmall": "Noapte (Sugari)",
-    "kitchen": "Bucătărie"
+    "kitchen": "Bucătărie",
+    "day": "Zi (Z)",
+    "night": "Noapte (N)",
+    "eight": "Tură 8h"
   },
   "legend": {
     "z": "Z — tură de zi 12h",
     "n": "N — tură de noapte 12h",
     "k": "8 — bucătărie 8h",
     "h": "8 — tura șefei 8h",
+    "eight": "8 — tură de zi 8h",
     "t": "4/8 — completare (top-up)",
     "co": "Co — zi de concediu",
     "locked": "celulă blocată"
@@ -161,6 +171,7 @@
   "editor": {
     "kitchen": "bucătărie",
     "head": "șefă",
+    "eight": "tură 8h",
     "clear": "Șterge",
     "locked": "celulă blocată"
   },
@@ -200,6 +211,7 @@
     "moveUp": "Mută mai sus",
     "moveDown": "Mută mai jos",
     "username": "Utilizator",
+    "staffType": "Tip",
     "section": "Secție",
     "role": "Rol",
     "active": "Activ",

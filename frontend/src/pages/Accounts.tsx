@@ -10,13 +10,13 @@ import {
   resetUserPassword,
   updateUser,
 } from "../api/client";
-import type { Role, Section, UserOut } from "../api/types";
-import { roleLabel, sectionLabel } from "../lib/schedule";
+import type { Role, Section, StaffType, UserOut } from "../api/types";
+import { roleLabel, sectionLabel, staffTypeLabel } from "../lib/schedule";
 import { Banner, ConfirmDialog, OneTimeSecret } from "../components/ui";
 
 interface EditState {
   full_name: string;
-  section: Section;
+  section: Section | null;
   role: Role;
   default_kitchen_capable: boolean;
   active: boolean;
@@ -147,6 +147,7 @@ export default function Accounts() {
               <th>{t("accounts.order")}</th>
               <th>{t("grid.nurse")}</th>
               <th>{t("accounts.username")}</th>
+              <th>{t("accounts.staffType")}</th>
               <th>{t("accounts.section")}</th>
               <th>{t("accounts.role")}</th>
               <th>{t("setup.kitchen")}</th>
@@ -168,36 +169,49 @@ export default function Accounts() {
                     />
                   </td>
                   <td>{u.username}</td>
+                  <td>{staffTypeLabel(u.staff_type, t)}</td>
                   <td>
-                    <select
-                      value={editState.section}
-                      onChange={(e) =>
-                        setEditState({ ...editState, section: e.target.value as Section })
-                      }
-                    >
-                      <option value="BIG">{t("section.big")}</option>
-                      <option value="SMALL">{t("section.small")}</option>
-                    </select>
+                    {u.staff_type === "infirmiera" ? (
+                      "—"
+                    ) : (
+                      <select
+                        value={editState.section ?? "BIG"}
+                        onChange={(e) =>
+                          setEditState({ ...editState, section: e.target.value as Section })
+                        }
+                      >
+                        <option value="BIG">{t("section.big")}</option>
+                        <option value="SMALL">{t("section.small")}</option>
+                      </select>
+                    )}
                   </td>
                   <td>
-                    <select
-                      value={editState.role}
-                      onChange={(e) =>
-                        setEditState({ ...editState, role: e.target.value as Role })
-                      }
-                    >
-                      <option value="nurse">{t("role.nurse")}</option>
-                      <option value="manager_nurse">{t("role.manager")}</option>
-                    </select>
+                    {u.staff_type === "infirmiera" ? (
+                      roleLabel(u.role, t)
+                    ) : (
+                      <select
+                        value={editState.role}
+                        onChange={(e) =>
+                          setEditState({ ...editState, role: e.target.value as Role })
+                        }
+                      >
+                        <option value="nurse">{t("role.nurse")}</option>
+                        <option value="manager_nurse">{t("role.manager")}</option>
+                      </select>
+                    )}
                   </td>
                   <td>
-                    <input
-                      type="checkbox"
-                      checked={editState.default_kitchen_capable}
-                      onChange={(e) =>
-                        setEditState({ ...editState, default_kitchen_capable: e.target.checked })
-                      }
-                    />
+                    {u.staff_type === "infirmiera" ? (
+                      "—"
+                    ) : (
+                      <input
+                        type="checkbox"
+                        checked={editState.default_kitchen_capable}
+                        onChange={(e) =>
+                          setEditState({ ...editState, default_kitchen_capable: e.target.checked })
+                        }
+                      />
+                    )}
                   </td>
                   <td>
                     <input
@@ -248,9 +262,10 @@ export default function Accounts() {
                   </td>
                   <td>{u.full_name}</td>
                   <td>{u.username}</td>
-                  <td>{sectionLabel(u.section, t)}</td>
+                  <td>{staffTypeLabel(u.staff_type, t)}</td>
+                  <td>{u.section ? sectionLabel(u.section, t) : "—"}</td>
                   <td>{roleLabel(u.role, t)}</td>
-                  <td>{u.default_kitchen_capable ? "✓" : "—"}</td>
+                  <td>{u.staff_type === "infirmiera" ? "—" : u.default_kitchen_capable ? "✓" : "—"}</td>
                   <td>
                     {u.active ? (
                       <span className="badge badge-approved">{t("accounts.activeYes")}</span>
@@ -317,11 +332,13 @@ function NewAccountForm({
   const { t } = useTranslation();
   const [username, setUsername] = useState("");
   const [fullName, setFullName] = useState("");
+  const [staffType, setStaffType] = useState<StaffType>("asistenta");
   const [section, setSection] = useState<Section>("BIG");
   const [role, setRole] = useState<Role>("nurse");
   const [kitchen, setKitchen] = useState(false);
   const [tempPassword, setTempPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const isAide = staffType === "infirmiera";
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -331,14 +348,17 @@ function NewAccountForm({
       const res = await createUser({
         username: username.trim(),
         full_name: fullName.trim(),
-        section,
-        role,
-        default_kitchen_capable: kitchen,
+        staff_type: staffType,
+        // Infirmiere have no section, no kitchen flag, and the plain nurse role.
+        section: isAide ? null : section,
+        role: isAide ? "nurse" : role,
+        default_kitchen_capable: isAide ? false : kitchen,
         temporary_password: tempPassword.trim() === "" ? undefined : tempPassword.trim(),
       });
       onCreated(t("accounts.createDone", { name: res.user.full_name }), res.temporary_password);
       setUsername("");
       setFullName("");
+      setStaffType("asistenta");
       setSection("BIG");
       setRole("nurse");
       setKitchen(false);
@@ -376,23 +396,38 @@ function NewAccountForm({
           />
         </div>
         <div className="field">
-          <label htmlFor="na-section">{t("accounts.section")}</label>
+          <label htmlFor="na-staff">{t("accounts.staffType")}</label>
           <select
-            id="na-section"
-            value={section}
-            onChange={(e) => setSection(e.target.value as Section)}
+            id="na-staff"
+            value={staffType}
+            onChange={(e) => setStaffType(e.target.value as StaffType)}
           >
-            <option value="BIG">{t("section.big")}</option>
-            <option value="SMALL">{t("section.small")}</option>
+            <option value="asistenta">{t("staff.asistenta")}</option>
+            <option value="infirmiera">{t("staff.infirmiera")}</option>
           </select>
         </div>
-        <div className="field">
-          <label htmlFor="na-role">{t("accounts.role")}</label>
-          <select id="na-role" value={role} onChange={(e) => setRole(e.target.value as Role)}>
-            <option value="nurse">{t("role.nurse")}</option>
-            <option value="manager_nurse">{t("role.manager")}</option>
-          </select>
-        </div>
+        {!isAide && (
+          <div className="field">
+            <label htmlFor="na-section">{t("accounts.section")}</label>
+            <select
+              id="na-section"
+              value={section}
+              onChange={(e) => setSection(e.target.value as Section)}
+            >
+              <option value="BIG">{t("section.big")}</option>
+              <option value="SMALL">{t("section.small")}</option>
+            </select>
+          </div>
+        )}
+        {!isAide && (
+          <div className="field">
+            <label htmlFor="na-role">{t("accounts.role")}</label>
+            <select id="na-role" value={role} onChange={(e) => setRole(e.target.value as Role)}>
+              <option value="nurse">{t("role.nurse")}</option>
+              <option value="manager_nurse">{t("role.manager")}</option>
+            </select>
+          </div>
+        )}
         <div className="field">
           <label htmlFor="na-temp">{t("accounts.tempPassword")}</label>
           <input
@@ -403,10 +438,12 @@ function NewAccountForm({
             placeholder={t("accounts.tempPlaceholder")}
           />
         </div>
-        <label className="checkbox-line field">
-          <input type="checkbox" checked={kitchen} onChange={(e) => setKitchen(e.target.checked)} />
-          {t("setup.kitchen")}
-        </label>
+        {!isAide && (
+          <label className="checkbox-line field">
+            <input type="checkbox" checked={kitchen} onChange={(e) => setKitchen(e.target.checked)} />
+            {t("setup.kitchen")}
+          </label>
+        )}
         <div className="field field-action">
           <button type="submit" disabled={busy}>
             {busy ? t("common.working") : t("accounts.create")}

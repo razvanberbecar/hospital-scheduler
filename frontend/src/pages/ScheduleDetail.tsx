@@ -138,10 +138,10 @@ export default function ScheduleDetail() {
         setError={setError}
       />
 
-      <Legend />
+      <Legend staffType={detail.staff_type} />
 
       {isManager && detail.setup.requests.length > 0 && (
-        <RequestsPanel requests={detail.setup.requests} roster={roster} />
+        <RequestsPanel requests={detail.setup.requests} roster={roster} isAide={detail.staff_type === "infirmiera"} />
       )}
 
       {isManager && (detail.violations.length > 0 || detail.warnings.length > 0) && (
@@ -254,6 +254,7 @@ function ScheduleGridEditable({
         totals={detail.totals}
         perDay={detail.per_day}
         holidays={holidays}
+        staffType={detail.staff_type}
         onCellClick={canEdit ? (userId, date) => setActive({ userId, date }) : undefined}
         activeCell={active}
       />
@@ -263,6 +264,7 @@ function ScheduleGridEditable({
           date={active.date}
           current={activeAssignment}
           isHead={activeIsHead}
+          isAide={detail.staff_type === "infirmiera"}
           saving={saving}
           onSave={saveEdit}
           onClose={() => setActive(null)}
@@ -278,6 +280,7 @@ function CellEditor({
   date,
   current,
   isHead,
+  isAide,
   saving,
   onSave,
   onClose,
@@ -286,6 +289,7 @@ function CellEditor({
   date: string;
   current: AssignmentOut | undefined;
   isHead: boolean;
+  isAide: boolean;
   saving: boolean;
   onSave: (
     shift: EditShift | null,
@@ -330,10 +334,16 @@ function CellEditor({
         <button type="button" className="chip" disabled={saving} onClick={() => onSave("N", undefined, locked)}>
           N
         </button>
-        <button type="button" className="chip" disabled={saving} onClick={() => onSave("K", undefined, locked)}>
-          8 ({t("editor.kitchen")})
-        </button>
-        {isHead && (
+        {isAide ? (
+          <button type="button" className="chip" disabled={saving} onClick={() => onSave("8", undefined, locked)}>
+            8 ({t("editor.eight")})
+          </button>
+        ) : (
+          <button type="button" className="chip" disabled={saving} onClick={() => onSave("K", undefined, locked)}>
+            8 ({t("editor.kitchen")})
+          </button>
+        )}
+        {!isAide && isHead && (
           <button type="button" className="chip" disabled={saving} onClick={() => onSave("H", undefined, locked)}>
             8 ({t("editor.head")})
           </button>
@@ -407,7 +417,8 @@ function ActionBar({
     setExportErr("");
     try {
       const mm = String(detail.month).padStart(2, "0");
-      await downloadExport(detail.id, `GRAFIC_Pediatrie_${detail.year}-${mm}.xlsx`);
+      const stem = detail.staff_type === "infirmiera" ? "Pediatrie_Infirmiere" : "Pediatrie";
+      await downloadExport(detail.id, `GRAFIC_${stem}_${detail.year}-${mm}.xlsx`);
     } catch (e) {
       setExportErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -695,9 +706,11 @@ function GenerateError({
 function RequestsPanel({
   requests,
   roster,
+  isAide,
 }: {
   requests: RequestOut[];
   roster: ScheduleDetailOut["setup"]["roster"];
+  isAide: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -706,7 +719,7 @@ function RequestsPanel({
       <table className="data-table">
         <thead>
           <tr>
-            <th>{t("grid.nurse")}</th>
+            <th>{isAide ? t("staff.infirmiera") : t("grid.nurse")}</th>
             <th>{t("request.date")}</th>
             <th>{t("request.kind")}</th>
             <th>{t("request.hard")}</th>

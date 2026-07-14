@@ -23,7 +23,7 @@ from openpyxl.worksheet.properties import PageSetupProperties
 from openpyxl.worksheet.worksheet import Worksheet
 
 from ..solver import calendar as cal
-from ..solver.domain import Nurse, Shift
+from ..solver.domain import STAFF_AIDE, Nurse, Shift
 from ..solver.validator import NurseTotals
 
 # Romanian month names (index 1..12), uppercased for the title.
@@ -46,8 +46,8 @@ _LEFT = Alignment(horizontal="left", vertical="center")
 
 
 def _cell_code(shift: Shift, duration: int) -> str:
-    """Grid code identical to the UI: Z, N, K->'8', H->'8', T->duration."""
-    if shift in (Shift.KITCHEN, Shift.HEAD):
+    """Grid code identical to the UI: Z, N, K->'8', H->'8', 8->'8', T->duration."""
+    if shift in (Shift.KITCHEN, Shift.HEAD, Shift.EIGHT):
         return "8"
     if shift is Shift.TOPUP:
         return str(duration)
@@ -66,7 +66,9 @@ def build_workbook(
     holidays: set[dt.date],
     totals: dict[int, NurseTotals],
     per_day: dict[dt.date, dict[str, int]],
+    staff_type: str = "asistenta",
 ) -> bytes:
+    is_aide = staff_type == STAFF_AIDE
     dates = cal.month_dates(year, month)
     n_days = len(dates)
 
@@ -93,9 +95,10 @@ def build_workbook(
         return None
 
     # --- 1. title block ----------------------------------------------------
+    subtitle = "Secția Pediatrie — INFIRMIERE" if is_aide else "Secția Pediatrie"
     title_lines = [
         ("SPITALUL JUDEȚEAN DE URGENȚĂ ZALĂU", 12),
-        ("Secția Pediatrie", 11),
+        (subtitle, 11),
         (f"GRAFIC DE LUCRU — {RO_MONTHS[month]} {year}", 11),
     ]
     row = 1
@@ -147,12 +150,15 @@ def build_workbook(
 
     r = body_start_row
     crt = 0
+    # Infirmiere have no sections: one ward-wide band titled "Infirmiere".
     last_section: str | None = None
     for nurse in nurses:
-        if nurse.section != last_section:
+        band_key = "" if is_aide else nurse.section
+        if band_key != last_section:
             # section label row spanning the whole grid
+            band_label = "Infirmiere" if is_aide else SECTION_LABELS.get(nurse.section, nurse.section)
             ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=last_col)
-            label = ws.cell(row=r, column=1, value=SECTION_LABELS.get(nurse.section, nurse.section))
+            label = ws.cell(row=r, column=1, value=band_label)
             label.font = Font(bold=True, italic=True)
             label.alignment = _LEFT
             label.fill = _SECTION_FILL
@@ -161,7 +167,7 @@ def build_workbook(
                 if col != 1:
                     ws.cell(row=r, column=col).fill = _SECTION_FILL
             r += 1
-            last_section = nurse.section
+            last_section = band_key
 
         crt += 1
         ws.cell(row=r, column=1, value=crt).alignment = _CENTER
@@ -185,14 +191,21 @@ def build_workbook(
                 cell.fill = fill
         r += 1
 
-    # --- 7. coverage rows (per section) ------------------------------------
-    coverage_rows = [
-        ("Zi (Copii Mari)", "Z_big"),
-        ("Zi (Sugari)", "Z_small"),
-        ("Noapte (Copii Mari)", "N_big"),
-        ("Noapte (Sugari)", "N_small"),
-        ("Bucătărie", "K"),
-    ]
+    # --- 7. coverage rows --------------------------------------------------
+    if is_aide:
+        coverage_rows = [
+            ("Zi (Z)", "Z"),
+            ("Noapte (N)", "N"),
+            ("Tură 8h", "E8"),
+        ]
+    else:
+        coverage_rows = [
+            ("Zi (Copii Mari)", "Z_big"),
+            ("Zi (Sugari)", "Z_small"),
+            ("Noapte (Copii Mari)", "N_big"),
+            ("Noapte (Sugari)", "N_small"),
+            ("Bucătărie", "K"),
+        ]
     for label, key in coverage_rows:
         lc = ws.cell(row=r, column=1, value=label)
         lc.font = Font(italic=True)

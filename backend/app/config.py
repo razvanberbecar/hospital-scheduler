@@ -12,5 +12,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     login_rate_per_minute: int = 10
     bcrypt_rounds: int = 12
+    # Seed the real 14-nurse roster on an EMPTY database at startup (plan 5).
+    # Tests disable it so they keep their empty-DB assumptions.
+    seed_default_staff: bool = True
 
     model_config = {"env_prefix": "HS_", "env_file": ".env", "extra": "ignore"}

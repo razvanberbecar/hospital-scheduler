@@ -5,18 +5,21 @@
 
 export type Role = "nurse" | "manager_nurse";
 export type Section = "BIG" | "SMALL";
+export type StaffType = "asistenta" | "infirmiera";
 export type ScheduleStatus = "draft" | "approved" | "locked";
 export type RequestKind = "Z" | "N" | "K" | "FREE";
-export type EditShift = "Z" | "N" | "K" | "T" | "H"; // H only valid for the head nurse
+// H is head-only; "8" is infirmiere-only (the 8h daytime shift).
+export type EditShift = "Z" | "N" | "K" | "T" | "H" | "8";
 // The shift codes that can appear in an assignment row (H is auto-managed).
-export type AssignmentShift = "Z" | "N" | "K" | "H" | "T";
+export type AssignmentShift = "Z" | "N" | "K" | "H" | "T" | "8";
 
 export interface UserOut {
   id: number;
   username: string;
   full_name: string;
   role: Role;
-  section: Section;
+  staff_type: StaffType;
+  section: Section | null; // null for infirmiere (one ward-wide pool)
   default_kitchen_capable: boolean;
   active: boolean;
   must_change_password: boolean;
@@ -28,7 +31,8 @@ export interface UserCreate {
   username: string;
   full_name: string;
   role: Role;
-  section: Section;
+  staff_type: StaffType;
+  section: Section | null;
   default_kitchen_capable: boolean;
   temporary_password?: string;
 }
@@ -41,9 +45,10 @@ export interface UserCreatedOut {
 export interface UserUpdate {
   full_name?: string;
   role?: Role;
-  section?: Section;
+  section?: Section | null;
   default_kitchen_capable?: boolean;
   active?: boolean;
+  // staff_type is immutable after creation and is deliberately absent here.
 }
 
 export interface ResetPasswordOut {
@@ -77,6 +82,7 @@ export interface RequestIn {
 export interface ScheduleCreate {
   year: number;
   month: number;
+  staff_type: StaffType;
   target_hours: number;
   roster: RosterItemIn[];
   days_off: DayOffIn[];
@@ -113,6 +119,7 @@ export interface ScheduleListItem {
   id: number;
   year: number;
   month: number;
+  staff_type: StaffType;
   status: ScheduleStatus;
   target_hours: number;
   approval_count: number;
@@ -121,7 +128,7 @@ export interface ScheduleListItem {
 export interface RosterEntryOut {
   user_id: number;
   full_name: string;
-  section: Section;
+  section: Section | null; // null for infirmiere
   role: Role;
   kitchen_capable: boolean;
 }
@@ -177,18 +184,23 @@ export interface IssueOut {
 }
 
 export interface DayCoverageOut {
+  // All optional: asistente report Z_big/Z_small/N_big/N_small/K; infirmiere Z/N/E8.
   date: string;
-  Z_big: number;
-  Z_small: number;
-  N_big: number;
-  N_small: number;
-  K: number;
+  Z_big?: number | null;
+  Z_small?: number | null;
+  N_big?: number | null;
+  N_small?: number | null;
+  K?: number | null;
+  Z?: number | null;
+  N?: number | null;
+  E8?: number | null;
 }
 
 export interface ScheduleDetailOut {
   id: number;
   year: number;
   month: number;
+  staff_type: StaffType;
   status: ScheduleStatus;
   setup: SetupOut;
   assignments: AssignmentOut[];

@@ -19,6 +19,11 @@ BIG = "BIG"      # Copii Mari
 SMALL = "SMALL"  # Sugari
 SECTION_LABEL = {BIG: "Copii Mari", SMALL: "Sugari"}
 
+# Staff types scheduled completely separately (infirmiere plan 2026-07-14):
+# asistente (nurses, everything historical) and infirmiere (nurse aides).
+STAFF_NURSE = "asistenta"
+STAFF_AIDE = "infirmiera"
+
 
 class Shift(str, Enum):
     DAY = "Z"       # 07:00-19:00, 12h
@@ -26,9 +31,11 @@ class Shift(str, Enum):
     KITCHEN = "K"   # 8h kitchen slot, exactly one every day, kitchen-capable only
     HEAD = "H"      # 8h head-nurse shift, every working day, head nurse only
     TOPUP = "T"     # 4h or 8h gap-closing shift, max one per nurse per month
+    EIGHT = "8"     # 8h daytime shift (07:00-15:00), every calendar day, infirmiere only
 
 
-FIXED_DURATION = {Shift.DAY: 12, Shift.NIGHT: 12, Shift.KITCHEN: 8, Shift.HEAD: 8}
+FIXED_DURATION = {Shift.DAY: 12, Shift.NIGHT: 12, Shift.KITCHEN: 8,
+                  Shift.HEAD: 8, Shift.EIGHT: 8}
 TOPUP_DURATIONS = (4, 8)
 REQUEST_KINDS = ("Z", "N", "K", "FREE")
 
@@ -76,6 +83,17 @@ class Config:
     w_kitchen_run: int = 20       # >3 consecutive kitchen days
     w_cluster: int = 20           # >5 working days in any 7-day window
     w_kspread: int = 10           # kitchen-count spread among kitchen-capable
+    # Cost per worked second-day-after-night (the 48h-rest exception, plan 1).
+    # The first day after a night stays hard-blocked (24h floor); only the second
+    # rest day is bendable. w_dev is 1000/hour, so an exception is taken only when
+    # it saves >=2h of deviation or is forced by coverage/hard pins; a soft
+    # request denial (w_request 500) stays cheaper, so wishes are dropped first.
+    w_rest48: int = 2000
+    # Infirmiere only: cost per day where the daily 8h slot is swapped for a
+    # second Z (1Z+1N+1x8 -> 2Z+1N). w_dev is 1000/hour, so a swap (adds 4h of
+    # capacity) is chosen only when it saves >=2h of total deviation or coverage
+    # is otherwise infeasible from leave.
+    w_eight_swap: int = 2000
 
 
 @dataclass
@@ -84,6 +102,7 @@ class ScheduleInput:
     month: int
     base_target: int
     nurses: list[Nurse]
+    staff_type: str = STAFF_NURSE   # STAFF_NURSE | STAFF_AIDE (separate lifecycles)
     leave: dict[int, set[dt.date]] = field(default_factory=dict)          # Co dates per nurse id
     prev_tail: dict[int, dict[dt.date, Shift]] = field(default_factory=dict)  # last 2 days of prev month
     requests: list[ShiftRequest] = field(default_factory=list)

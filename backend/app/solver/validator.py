@@ -16,8 +16,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from . import calendar as cal
-from .domain import (BIG, SECTION_LABEL, SMALL, TOPUP_DURATIONS, Assignment,
-                     Issue, Nurse, ScheduleInput, Shift)
+from .domain import (BIG, SECTION_LABEL, SMALL, STAFF_AIDE, TOPUP_DURATIONS,
+                     Assignment, Issue, Nurse, ScheduleInput, Shift)
 from .prechecks import REQUEST_SHIFT, effective_requests, per_nurse_night_minimum
 
 
@@ -81,6 +81,7 @@ def compute_totals(inp: ScheduleInput, assignments: list[Assignment]) -> dict[in
 
 def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
     cfg = inp.config
+    is_aide = inp.staff_type == STAFF_AIDE
     holidays = inp.holidays if inp.holidays is not None else cal.default_holidays(inp.year, inp.month)
     dates = cal.month_dates(inp.year, inp.month)
     by_id: dict[int, Nurse] = {n.id: n for n in inp.nurses}
@@ -128,14 +129,26 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
             V(Issue("violation", "bad_bucket_split",
                     f"{nurse.name}: {a.shift.value} on {a.date} stored as {a.normal_hours}/{a.weekend_hours} "
                     f"(normal/weekend) but the calendar says {nh}/{wh}.", nurse_id=a.nurse_id, date=a.date))
-        if a.shift is Shift.HEAD and not nurse.is_head:
-            V(Issue("violation", "head_pattern",
-                    f"{nurse.name}: head-nurse shift assigned to a non-head nurse on {a.date}.",
-                    nurse_id=a.nurse_id, date=a.date))
-        if a.shift is Shift.KITCHEN and not nurse.kitchen_capable:
-            V(Issue("violation", "kitchen_capability",
-                    f"{nurse.name}: kitchen shift on {a.date} but she is not kitchen-capable.",
-                    nurse_id=a.nurse_id, date=a.date))
+        # shift legality per staff type: K/H never appear on an infirmiere
+        # schedule; the 8h shift never appears on a nurse schedule.
+        if is_aide:
+            if a.shift in (Shift.KITCHEN, Shift.HEAD):
+                V(Issue("violation", "shift_not_allowed",
+                        f"{nurse.name}: {a.shift.value} on {a.date} is not allowed on an infirmiere "
+                        f"schedule (no kitchen, no head).", nurse_id=a.nurse_id, date=a.date))
+        else:
+            if a.shift is Shift.EIGHT:
+                V(Issue("violation", "shift_not_allowed",
+                        f"{nurse.name}: the 8h shift on {a.date} is only for infirmiere schedules.",
+                        nurse_id=a.nurse_id, date=a.date))
+            if a.shift is Shift.HEAD and not nurse.is_head:
+                V(Issue("violation", "head_pattern",
+                        f"{nurse.name}: head-nurse shift assigned to a non-head nurse on {a.date}.",
+                        nurse_id=a.nurse_id, date=a.date))
+            if a.shift is Shift.KITCHEN and not nurse.kitchen_capable:
+                V(Issue("violation", "kitchen_capability",
+                        f"{nurse.name}: kitchen shift on {a.date} but she is not kitchen-capable.",
+                        nurse_id=a.nurse_id, date=a.date))
 
     # one shift per nurse per day; at most one top-up per month
     for (nid, day), lst in by_nurse_day.items():
@@ -163,65 +176,108 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
                 continue
             prev1 = shift_on(n.id, day - dt.timedelta(days=1))
             prev2 = shift_on(n.id, day - dt.timedelta(days=2))
-            if prev1 is Shift.NIGHT or prev2 is Shift.NIGHT:
+            if prev1 is Shift.NIGHT:
+                # the 24h floor is absolute: the first day after a night is never
+                # worked (plan 1), so this stays a violation blocking approval.
                 V(Issue("violation", "rest_after_night",
-                        f"{n.name}: works {today.value} on {day} but had a night shift on "
-                        f"{'the previous day' if prev1 is Shift.NIGHT else 'two days before'} - "
-                        f"48h of rest are required after a night.", nurse_id=n.id, date=day))
+                        f"{n.name}: works {today.value} on {day} but had a night shift the "
+                        f"previous day - the first day after a night shift can never be "
+                        f"worked (24h rest).", nurse_id=n.id, date=day))
+            elif prev2 is Shift.NIGHT:
+                # the second rest day is now a penalized exception, not a hard
+                # rule (plan 1): report it as a warning, do not block approval.
+                two_before = day - dt.timedelta(days=2)
+                W(Issue("warning", "rest48_exception",
+                        f"{n.name}: works {today.value} on {day}, only one full day after the "
+                        f"night of {two_before} - 48h-rest exception (allowed, keep rare).",
+                        nurse_id=n.id, date=day))
             elif prev1 is Shift.DAY and today is not Shift.NIGHT:
                 V(Issue("violation", "rest_after_day",
                         f"{n.name}: {today.value} on {day} starts less than 24h after the previous day shift - "
                         f"only a night shift may follow a day shift on the next day.", nurse_id=n.id, date=day))
 
-    # --- coverage: HARD per-section day/night, exactly one kitchen -----------
-    # Every day needs one Z and one N from EACH section (that is how the 2Z, 2N
-    # are formed). The head nurse's own Z/N counts toward her section. Total
-    # staffing caps stay total-based.
-    def section_counts(lst: list[Assignment]) -> dict[str, int]:
-        counts = {BIG: 0, SMALL: 0}
-        for a in lst:
-            n = by_id.get(a.nurse_id)
-            if n is not None and n.section in counts:
-                counts[n.section] += 1
-        return counts
-
-    for day in dates:
-        z = by_day_shift.get((day, Shift.DAY), [])
-        nn = by_day_shift.get((day, Shift.NIGHT), [])
-        k = by_day_shift.get((day, Shift.KITCHEN), [])
-        zc, nc = section_counts(z), section_counts(nn)
-        report.per_day[day] = {
-            "Z_big": zc[BIG], "Z_small": zc[SMALL],
-            "N_big": nc[BIG], "N_small": nc[SMALL], "K": len(k)}
-        if len(z) > 2 + cfg.extra_day_cap:
-            V(Issue("violation", "coverage_day",
-                    f"{day}: {len(z)} day nurses exceeds the cap of {2 + cfg.extra_day_cap}.", date=day))
-        if len(nn) > 2 + cfg.extra_night_cap:
-            V(Issue("violation", "coverage_night",
-                    f"{day}: {len(nn)} night nurses exceeds the cap of {2 + cfg.extra_night_cap}.", date=day))
-        if len(k) != 1:
-            V(Issue("violation", "coverage_kitchen",
-                    f"{day}: {len(k)} kitchen nurse(s); exactly 1 is required every day.", date=day))
-        for label, code, counts in (("day", "coverage_day_section", zc),
-                                    ("night", "coverage_night_section", nc)):
-            for section in (BIG, SMALL):
-                if counts[section] < 1:
-                    V(Issue("violation", code,
-                            f"{day}: no {label} nurse from {SECTION_LABEL[section]} - each section "
-                            f"needs one {label} shift every day.", date=day))
-
-    # head nurse present every working day (unless on leave) - a warning now:
-    # her cells are hand-editable and may deliberately be cleared.
-    heads = [n for n in inp.nurses if n.is_head]
-    for h in heads:
+    # --- coverage -------------------------------------------------------------
+    if is_aide:
+        # Infirmiere: each day must be 1Z + 1N + 1x8, or the accepted swap
+        # exception 2Z + 1N (e == 0, z >= 2). A day that is neither is a
+        # violation. Caps mirror the model (Z <= 2 + extra_day_cap once swapped,
+        # N <= 1 + extra_night_cap).
         for day in dates:
-            if cal.is_offday(day, holidays) or day in inp.leave_of(h.id):
-                continue
-            lst = by_nurse_day.get((h.id, day), [])
-            if not lst:
-                W(Issue("warning", "head_missing",
-                        f"{h.name} (head nurse) has no shift on working day {day}.",
-                        nurse_id=h.id, date=day))
+            z = by_day_shift.get((day, Shift.DAY), [])
+            nn = by_day_shift.get((day, Shift.NIGHT), [])
+            e = by_day_shift.get((day, Shift.EIGHT), [])
+            zc, ec = len(z), len(e)
+            report.per_day[day] = {"Z": zc, "N": len(nn), "E8": ec}
+            if len(nn) < 1:
+                V(Issue("violation", "coverage_night",
+                        f"{day}: no night infirmiera; one night shift is required every day.", date=day))
+            if zc < 1:
+                V(Issue("violation", "coverage_day",
+                        f"{day}: no day (Z) infirmiera; at least one is required every day.", date=day))
+            if ec > 1:
+                V(Issue("violation", "coverage_eight",
+                        f"{day}: {ec} eight-hour shifts; at most one is allowed.", date=day))
+            # neither 1Z+1N+1x8 nor 2Z+1N: the day slot is unfilled
+            if ec + min(zc, 2) < 2:
+                V(Issue("violation", "coverage_eight",
+                        f"{day}: the daytime slot is unfilled - a day needs 1 Z + 1 N + 1 x 8h, or "
+                        f"the 2 Z + 1 N exception.", date=day))
+            if len(nn) > 1 + cfg.extra_night_cap:
+                V(Issue("violation", "coverage_night",
+                        f"{day}: {len(nn)} night infirmiere exceeds the cap of {1 + cfg.extra_night_cap}.",
+                        date=day))
+            if zc > 2 + cfg.extra_day_cap:
+                V(Issue("violation", "coverage_day",
+                        f"{day}: {zc} day infirmiere exceeds the cap of {2 + cfg.extra_day_cap}.", date=day))
+    else:
+        # HARD per-section day/night, exactly one kitchen. Every day needs one Z
+        # and one N from EACH section (that is how the 2Z, 2N are formed). The
+        # head nurse's own Z/N counts toward her section. Caps stay total-based.
+        def section_counts(lst: list[Assignment]) -> dict[str, int]:
+            counts = {BIG: 0, SMALL: 0}
+            for a in lst:
+                n = by_id.get(a.nurse_id)
+                if n is not None and n.section in counts:
+                    counts[n.section] += 1
+            return counts
+
+        for day in dates:
+            z = by_day_shift.get((day, Shift.DAY), [])
+            nn = by_day_shift.get((day, Shift.NIGHT), [])
+            k = by_day_shift.get((day, Shift.KITCHEN), [])
+            zc, nc = section_counts(z), section_counts(nn)
+            report.per_day[day] = {
+                "Z_big": zc[BIG], "Z_small": zc[SMALL],
+                "N_big": nc[BIG], "N_small": nc[SMALL], "K": len(k)}
+            if len(z) > 2 + cfg.extra_day_cap:
+                V(Issue("violation", "coverage_day",
+                        f"{day}: {len(z)} day nurses exceeds the cap of {2 + cfg.extra_day_cap}.", date=day))
+            if len(nn) > 2 + cfg.extra_night_cap:
+                V(Issue("violation", "coverage_night",
+                        f"{day}: {len(nn)} night nurses exceeds the cap of {2 + cfg.extra_night_cap}.", date=day))
+            if len(k) != 1:
+                V(Issue("violation", "coverage_kitchen",
+                        f"{day}: {len(k)} kitchen nurse(s); exactly 1 is required every day.", date=day))
+            for label, code, counts in (("day", "coverage_day_section", zc),
+                                        ("night", "coverage_night_section", nc)):
+                for section in (BIG, SMALL):
+                    if counts[section] < 1:
+                        V(Issue("violation", code,
+                                f"{day}: no {label} nurse from {SECTION_LABEL[section]} - each section "
+                                f"needs one {label} shift every day.", date=day))
+
+        # head nurse present every working day (unless on leave) - a warning now:
+        # her cells are hand-editable and may deliberately be cleared.
+        heads = [n for n in inp.nurses if n.is_head]
+        for h in heads:
+            for day in dates:
+                if cal.is_offday(day, holidays) or day in inp.leave_of(h.id):
+                    continue
+                lst = by_nurse_day.get((h.id, day), [])
+                if not lst:
+                    W(Issue("warning", "head_missing",
+                            f"{h.name} (head nurse) has no shift on working day {day}.",
+                            nurse_id=h.id, date=day))
 
     # --- per-nurse totals and hour rules --------------------------------------
     report.totals = compute_totals(inp, assignments)

@@ -42,6 +42,12 @@
     "nurse": "nurse",
     "manager": "head nurse"
   },
+  "staff": {
+    "asistenta": "Nurse",
+    "infirmiera": "Nurse aide",
+    "asistentePlural": "Nurses",
+    "infirmierePlural": "Nurse aides"
+  },
   "status": {
     "draft": "Draft",
     "approved": "Approved",
@@ -96,13 +102,17 @@
     "daySmall": "Day (Infants)",
     "nightBig": "Night (Older Children)",
     "nightSmall": "Night (Infants)",
-    "kitchen": "Kitchen"
+    "kitchen": "Kitchen",
+    "day": "Day (Z)",
+    "night": "Night (N)",
+    "eight": "8h shift"
   },
   "legend": {
     "z": "Z — 12h day shift",
     "n": "N — 12h night shift",
     "k": "8 — kitchen 8h",
     "h": "8 — head-nurse shift 8h",
+    "eight": "8 — 8h day shift",
     "t": "4/8 — top-up",
     "co": "Co — leave day",
     "locked": "locked cell"
@@ -161,6 +171,7 @@
   "editor": {
     "kitchen": "kitchen",
     "head": "head",
+    "eight": "8h shift",
     "clear": "Clear",
     "locked": "locked cell"
   },
@@ -200,6 +211,7 @@
     "moveUp": "Move up",
     "moveDown": "Move down",
     "username": "Username",
+    "staffType": "Type",
     "section": "Section",
     "role": "Role",
     "active": "Active",

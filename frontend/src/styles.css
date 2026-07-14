@@ -827,3 +827,25 @@ select {
 .setup-matrix .cell {
   min-width: 26px;
 }
+
+/* Staff-type tabs on the schedules list (Asistente / Infirmiere). */
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  margin: 8px 0 16px;
+  border-bottom: 2px solid #d5deea;
+}
+.tab-bar .tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  padding: 8px 16px;
+  font-weight: 600;
+  color: #5a6472;
+  cursor: pointer;
+}
+.tab-bar .tab.active {
+  color: #1f5fbf;
+  border-bottom-color: #1f5fbf;
+}

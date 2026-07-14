@@ -29,9 +29,9 @@ from ..models.schemas import (ApprovalListItem, ApprovalOut,
                               RosterEntryOut, ScheduleCreate,
                               ScheduleDetailOut, ScheduleListItem,
                               ScheduleSetupPut, SetupOut, ValidateOut)
-from ..models.tables import (STATUS_APPROVED, STATUS_DRAFT, STATUS_LOCKED,
-                             Approval, AssignmentRow, DayOff, Schedule,
-                             ScheduleNurse, ShiftRequestRow, User)
+from ..models.tables import (STAFF_AIDE, STATUS_APPROVED, STATUS_DRAFT,
+                             STATUS_LOCKED, Approval, AssignmentRow, DayOff,
+                             Schedule, ScheduleNurse, ShiftRequestRow, User)
 from ..solver import calendar as cal
 from ..solver.domain import (TOPUP_DURATIONS, Assignment, Config, Nurse,
                              ScheduleInput, Shift, ShiftRequest)
@@ -89,6 +89,8 @@ def _roster_nurses(db: Session, schedule: Schedule) -> list[Nurse]:
         u = users.get(r.user_id)
         if u is None:
             continue
+        # section is None for infirmiere (one pool); the solver only reads it on
+        # nurse schedules, where it is always set.
         nurses.append(Nurse(id=u.id, name=u.full_name, section=u.section,
                             role=u.role, kitchen_capable=r.kitchen_capable))
     return nurses
@@ -152,6 +154,7 @@ def _build_input(db: Session, schedule: Schedule, *, with_locks: bool = False) -
     return ScheduleInput(
         year=schedule.year, month=schedule.month, base_target=schedule.target_hours,
         nurses=_roster_nurses(db, schedule),
+        staff_type=schedule.staff_type,
         leave=_leave(db, schedule),
         prev_tail=_prev_tail(schedule),
         requests=_shift_requests(db, schedule),
@@ -168,12 +171,14 @@ def _latest_approval(db: Session, schedule_id: int) -> Approval | None:
                       .order_by(Approval.version.desc())).first()
 
 
-def _prev_tail_from_previous(db: Session, year: int, month: int) -> dict:
+def _prev_tail_from_previous(db: Session, year: int, month: int, staff_type: str) -> dict:
     """prev_tail for a new month M drawn from M-1's stored assignments (the last
     two days' shift codes), used only for the cross-boundary rest rules. Empty
-    when there is no previous schedule. Hours no longer carry between months."""
+    when there is no previous schedule. Scoped to one staff type so the two
+    lifecycles never draw tails from each other."""
     py, pm = _prev_month(year, month)
-    prev = db.scalar(select(Schedule).where(Schedule.year == py, Schedule.month == pm))
+    prev = db.scalar(select(Schedule).where(
+        Schedule.year == py, Schedule.month == pm, Schedule.staff_type == staff_type))
     if prev is None:
         return {}
     last_two = sorted(cal.month_dates(py, pm))[-2:]
@@ -192,6 +197,8 @@ def _get_schedule(db: Session, schedule_id: int, user: User) -> Schedule:
         raise HTTPException(404, "No such schedule")
     if not user.is_manager and schedule.status == STATUS_DRAFT:
         raise HTTPException(404, "No such schedule")  # nurses never see drafts
+    if not user.is_manager and schedule.staff_type != user.staff_type:
+        raise HTTPException(404, "No such schedule")  # readers see only their own staff type
     return schedule
 
 
@@ -206,9 +213,14 @@ def _require_draft(schedule: Schedule) -> None:
 
 def _write_roster(db: Session, schedule: Schedule, roster, users: dict[int, User]) -> None:
     db.execute(delete(ScheduleNurse).where(ScheduleNurse.schedule_id == schedule.id))
+    is_aide = schedule.staff_type == STAFF_AIDE
     for item in roster:
         u = users[item.user_id]
-        kitchen = u.default_kitchen_capable if item.kitchen_capable is None else item.kitchen_capable
+        # Infirmiere never have a kitchen slot, so the kitchen flag is forced off.
+        if is_aide:
+            kitchen = False
+        else:
+            kitchen = u.default_kitchen_capable if item.kitchen_capable is None else item.kitchen_capable
         db.add(ScheduleNurse(schedule_id=schedule.id, user_id=item.user_id, kitchen_capable=kitchen))
 
 
@@ -233,8 +245,10 @@ def _write_requests(db: Session, schedule: Schedule, requests) -> None:
                                date=item.date, kind=item.kind, hard=item.hard))
 
 
-def _validate_roster(db: Session, roster) -> dict[int, User]:
-    """Rostered users must exist and be active; at most one manager_nurse (head)."""
+def _validate_roster(db: Session, roster, staff_type: str) -> dict[int, User]:
+    """Rostered users must exist, be active and share the schedule's staff type;
+    the at-most-one-head rule applies to nurse schedules only (infirmiere have no
+    head)."""
     ids = [item.user_id for item in roster]
     if len(set(ids)) != len(ids):
         raise HTTPException(422, "A user appears more than once on the roster")
@@ -245,10 +259,20 @@ def _validate_roster(db: Session, roster) -> dict[int, User]:
             raise HTTPException(422, f"User id {uid} does not exist")
         if not u.active:
             raise HTTPException(422, f"User '{u.username}' is deactivated and cannot be rostered")
-    heads = [uid for uid in ids if users[uid].is_manager]
-    if len(heads) > 1:
-        raise HTTPException(422, "At most one manager_nurse (head nurse) may be on the roster")
+        if u.staff_type != staff_type:
+            raise HTTPException(422,
+                f"User '{u.username}' is a {u.staff_type}; this schedule is for {staff_type} only")
+    if staff_type != STAFF_AIDE:
+        heads = [uid for uid in ids if users[uid].is_manager]
+        if len(heads) > 1:
+            raise HTTPException(422, "At most one manager_nurse (head nurse) may be on the roster")
     return users
+
+
+def _reject_bad_requests(requests, staff_type: str) -> None:
+    """Kitchen (K) requests make no sense on an infirmiere schedule (no kitchen)."""
+    if staff_type == STAFF_AIDE and any(r.kind == "K" for r in requests):
+        raise HTTPException(422, "Kitchen (K) requests are not allowed on an infirmiere schedule")
 
 
 # --- report / payload assembly ---------------------------------------------
@@ -272,7 +296,10 @@ def _totals_out(totals: dict[int, NurseTotals]) -> list[NurseTotalsOut]:
         for nid, t in sorted(totals.items())]
 
 
-def _per_day_out(per_day: dict[dt.date, dict[str, int]]) -> list[DayCoverageOut]:
+def _per_day_out(per_day: dict[dt.date, dict[str, int]], staff_type: str) -> list[DayCoverageOut]:
+    if staff_type == STAFF_AIDE:
+        return [DayCoverageOut(date=day, Z=c.get("Z", 0), N=c.get("N", 0), E8=c.get("E8", 0))
+                for day, c in sorted(per_day.items())]
     return [DayCoverageOut(
         date=day, Z_big=c.get("Z_big", 0), Z_small=c.get("Z_small", 0),
         N_big=c.get("N_big", 0), N_small=c.get("N_small", 0), K=c.get("K", 0))
@@ -317,11 +344,12 @@ def _detail(db: Session, schedule: Schedule, viewer: User, **solver_echo) -> Sch
     approval_count = len(list(db.scalars(
         select(Approval.id).where(Approval.schedule_id == schedule.id))))
     return ScheduleDetailOut(
-        id=schedule.id, year=schedule.year, month=schedule.month, status=schedule.status,
+        id=schedule.id, year=schedule.year, month=schedule.month,
+        staff_type=schedule.staff_type, status=schedule.status,
         setup=_setup_out(db, schedule),
         assignments=_assignments_out(assignments, locked),
         totals=_totals_out(totals),
-        per_day=_per_day_out(report.per_day),
+        per_day=_per_day_out(report.per_day, schedule.staff_type),
         violations=[_issue_out(i) for i in report.violations],
         warnings=[_issue_out(i) for i in report.warnings],
         approval_count=approval_count,
@@ -335,12 +363,16 @@ def create_schedule(body: ScheduleCreate, db: Db, manager: Manager) -> ScheduleD
     """Create a draft month (plan section 5). Auto-fills prev_tail (the previous
     month's last two days) from the stored grid for the cross-boundary rest
     rules; no hour balance carries between months."""
-    if db.scalar(select(Schedule).where(Schedule.year == body.year, Schedule.month == body.month)):
-        raise HTTPException(409, f"A schedule for {body.month:02d}/{body.year} already exists")
-    users = _validate_roster(db, body.roster)
-    prev_tail = _prev_tail_from_previous(db, body.year, body.month)
+    if db.scalar(select(Schedule).where(Schedule.year == body.year, Schedule.month == body.month,
+                                        Schedule.staff_type == body.staff_type)):
+        raise HTTPException(409,
+            f"A {body.staff_type} schedule for {body.month:02d}/{body.year} already exists")
+    users = _validate_roster(db, body.roster, body.staff_type)
+    _reject_bad_requests(body.requests, body.staff_type)
+    prev_tail = _prev_tail_from_previous(db, body.year, body.month, body.staff_type)
     schedule = Schedule(
-        year=body.year, month=body.month, target_hours=body.target_hours,
+        year=body.year, month=body.month, staff_type=body.staff_type,
+        target_hours=body.target_hours,
         status=STATUS_DRAFT, prev_tail=prev_tail, config=body.config or {})
     db.add(schedule)
     db.flush()
@@ -359,13 +391,15 @@ def list_schedules(db: Db, user: AnyUser,
     if year is not None:
         q = q.where(Schedule.year == year)
     if not user.is_manager:
-        q = q.where(Schedule.status.in_([STATUS_APPROVED, STATUS_LOCKED]))
+        q = q.where(Schedule.status.in_([STATUS_APPROVED, STATUS_LOCKED]),
+                    Schedule.staff_type == user.staff_type)
     schedules = list(db.scalars(q.order_by(Schedule.year, Schedule.month)))
     out = []
     for s in schedules:
         count = len(list(db.scalars(select(Approval.id).where(Approval.schedule_id == s.id))))
-        out.append(ScheduleListItem(id=s.id, year=s.year, month=s.month, status=s.status,
-                                    target_hours=s.target_hours, approval_count=count))
+        out.append(ScheduleListItem(id=s.id, year=s.year, month=s.month, staff_type=s.staff_type,
+                                    status=s.status, target_hours=s.target_hours,
+                                    approval_count=count))
     return out
 
 
@@ -404,6 +438,7 @@ def export_xlsx(schedule_id: int, db: Db, manager: Manager) -> Response:
     report = _validate_current(db, schedule)
     content = build_workbook(
         year=schedule.year, month=schedule.month,
+        staff_type=schedule.staff_type,
         nurses=_sorted_roster(db, schedule),
         assignments=_current_assignments(db, schedule),
         leave=_leave(db, schedule),
@@ -411,7 +446,8 @@ def export_xlsx(schedule_id: int, db: Db, manager: Manager) -> Response:
         totals=report.totals,
         per_day=report.per_day,
     )
-    filename = f"GRAFIC_Pediatrie_{schedule.year}-{schedule.month:02d}.xlsx"
+    stem = "Pediatrie_Infirmiere" if schedule.staff_type == STAFF_AIDE else "Pediatrie"
+    filename = f"GRAFIC_{stem}_{schedule.year}-{schedule.month:02d}.xlsx"
     return Response(content=content, media_type=XLSX_MEDIA_TYPE,
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
@@ -423,7 +459,8 @@ def update_setup(schedule_id: int, body: ScheduleSetupPut, db: Db, manager: Mana
     all existing assignments are deleted here (documented)."""
     schedule = _get_schedule(db, schedule_id, manager)
     _require_draft(schedule)
-    users = _validate_roster(db, body.roster)
+    users = _validate_roster(db, body.roster, schedule.staff_type)
+    _reject_bad_requests(body.requests, schedule.staff_type)
     schedule.target_hours = body.target_hours
     schedule.prev_tail = {str(nid): {d.isoformat(): code for d, code in day_map.items()}
                           for nid, day_map in body.prev_tail.items()}
@@ -490,7 +527,7 @@ def validate_schedule(schedule_id: int, db: Db, manager: Manager) -> ValidateOut
         violations=[_issue_out(i) for i in report.violations],
         warnings=[_issue_out(i) for i in report.warnings],
         totals=_totals_out(report.totals),
-        per_day=_per_day_out(report.per_day))
+        per_day=_per_day_out(report.per_day, schedule.staff_type))
 
 
 @router.patch("/{schedule_id}/assignments", response_model=ValidateOut)
@@ -501,6 +538,7 @@ def edit_assignments(schedule_id: int, body: AssignmentsPatch, db: Db, manager: 
     only on the rostered head nurse."""
     schedule = _get_schedule(db, schedule_id, manager)
     _require_draft(schedule)
+    is_aide = schedule.staff_type == STAFF_AIDE
     holidays = _holidays(db, schedule.year, schedule.month)
     head_ids = {n.id for n in _roster_nurses(db, schedule) if n.is_head}
     for edit in body.edits:
@@ -514,6 +552,12 @@ def edit_assignments(schedule_id: int, body: AssignmentsPatch, db: Db, manager: 
                 db.delete(existing)
             continue
         shift = Shift(edit.shift)
+        # Shift legality per staff type: the 8h shift is infirmiere-only; the
+        # kitchen (K) and head (H) shifts are nurse-only.
+        if is_aide and shift in (Shift.KITCHEN, Shift.HEAD):
+            raise HTTPException(422, "Kitchen (K) and head (H) shifts are not allowed on an infirmiere schedule")
+        if not is_aide and shift is Shift.EIGHT:
+            raise HTTPException(422, "The 8h shift is only for infirmiere schedules")
         if shift is Shift.HEAD and edit.user_id not in head_ids:
             raise HTTPException(422, "The 8h head-nurse shift (H) can be placed only on the head nurse")
         if shift is Shift.TOPUP:
@@ -539,7 +583,7 @@ def edit_assignments(schedule_id: int, body: AssignmentsPatch, db: Db, manager: 
         violations=[_issue_out(i) for i in report.violations],
         warnings=[_issue_out(i) for i in report.warnings],
         totals=_totals_out(report.totals),
-        per_day=_per_day_out(report.per_day))
+        per_day=_per_day_out(report.per_day, schedule.staff_type))
 
 
 @router.post("/{schedule_id}/approve", response_model=ApprovalOut)
@@ -554,7 +598,9 @@ def approve(schedule_id: int, db: Db, manager: Manager) -> ApprovalOut:
         raise HTTPException(409, "This month is locked and can no longer be approved")
     if schedule.status == STATUS_APPROVED:
         ny, nm = _next_month(schedule.year, schedule.month)
-        nxt = db.scalar(select(Schedule).where(Schedule.year == ny, Schedule.month == nm))
+        nxt = db.scalar(select(Schedule).where(
+            Schedule.year == ny, Schedule.month == nm,
+            Schedule.staff_type == schedule.staff_type))
         if nxt is not None and nxt.status != STATUS_DRAFT:
             raise HTTPException(409, "Cannot re-approve: the following month is no longer a draft")
 
@@ -584,8 +630,12 @@ def approve(schedule_id: int, db: Db, manager: Manager) -> ApprovalOut:
     schedule.status = STATUS_APPROVED
     db.add(schedule)
 
+    # Locking / prev_tail refresh operate within this staff type only, so
+    # approving infirmiere M never touches the nurse month M-1 (and vice versa).
     py, pm = _prev_month(schedule.year, schedule.month)
-    prev = db.scalar(select(Schedule).where(Schedule.year == py, Schedule.month == pm))
+    prev = db.scalar(select(Schedule).where(
+        Schedule.year == py, Schedule.month == pm,
+        Schedule.staff_type == schedule.staff_type))
     if prev is not None and prev.status == STATUS_APPROVED:
         prev.status = STATUS_LOCKED
         db.add(prev)
@@ -594,9 +644,11 @@ def approve(schedule_id: int, db: Db, manager: Manager) -> ApprovalOut:
     # its prev_tail so the cross-boundary rest rules see the approved reality
     # (matters after a reopen -> edit -> re-approve cycle).
     ny, nm = _next_month(schedule.year, schedule.month)
-    nxt = db.scalar(select(Schedule).where(Schedule.year == ny, Schedule.month == nm))
+    nxt = db.scalar(select(Schedule).where(
+        Schedule.year == ny, Schedule.month == nm,
+        Schedule.staff_type == schedule.staff_type))
     if nxt is not None and nxt.status == STATUS_DRAFT:
-        nxt.prev_tail = _prev_tail_from_previous(db, ny, nm)
+        nxt.prev_tail = _prev_tail_from_previous(db, ny, nm, schedule.staff_type)
         db.add(nxt)
     db.commit()
     db.refresh(approval)

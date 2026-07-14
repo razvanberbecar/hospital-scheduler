@@ -24,7 +24,8 @@ export interface Me {
   username: string;
   full_name: string;
   role: "nurse" | "manager_nurse";
-  section: "BIG" | "SMALL";
+  staff_type: "asistenta" | "infirmiera";
+  section: "BIG" | "SMALL" | null;
   default_kitchen_capable: boolean;
   active: boolean;
   must_change_password: boolean;

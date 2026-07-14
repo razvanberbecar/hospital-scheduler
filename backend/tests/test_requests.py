@@ -94,6 +94,22 @@ def test_hard_contradictions_are_precheck_errors():
     assert any(i.code == "request_rest" and i.level == "error" for i in issues)
 
 
+def test_infeasible_hard_requests_are_explained_in_the_diagnosis():
+    """Plan 2 (A): when must-have requests make the month INFEASIBLE, the result's
+    diagnosis names the originally-hard requests that a valid schedule must drop.
+    Six BIG nurses (of seven) hard-FREE the same working day, so BIG cannot field
+    its required Z+N pair - the prechecks pass, but the model is infeasible."""
+    day = d(8)  # a Wednesday working day
+    reqs = [ShiftRequest(nid, day, "FREE", hard=True) for nid in (1, 2, 3, 4, 5, 6)]
+    inp = july(reqs)
+    assert not has_errors(run_prechecks(inp))  # nothing catches it before solving
+    res = solve(inp)
+    assert res.status == "INFEASIBLE", res.status
+    assert res.diagnosis, "an infeasible run with hard requests must be explained"
+    assert res.diagnosis[0].startswith("The must-have requests cannot all be honored")
+    assert any(f"FREE on {day}" in line for line in res.diagnosis[1:])
+
+
 def test_removing_a_hard_request_assignment_is_a_violation(bundle_result):
     inp, res = bundle_result
     tampered = [a for a in res.assignments

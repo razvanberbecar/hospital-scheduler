@@ -59,6 +59,10 @@ export function cellView(
         text = "8";
         cls = "c-k";
         break;
+      case "8":
+        text = "8";
+        cls = "c-k"; // infirmiere 8h daytime slot, shares the 8h swatch
+        break;
       case "H":
         text = "8";
         cls = "c-h";
@@ -113,6 +117,16 @@ export function issueText(issue: IssueOut, roster: RosterEntryOut[]): string {
 /** Localized section label. */
 export function sectionLabel(section: string, t: TFunction): string {
   return section === "BIG" ? t("section.big") : t("section.small");
+}
+
+/** Localized staff-type label (singular). */
+export function staffTypeLabel(staffType: string, t: TFunction): string {
+  return staffType === "infirmiera" ? t("staff.infirmiera") : t("staff.asistenta");
+}
+
+/** Localized staff-type label (plural, for tabs/headings). */
+export function staffTypePlural(staffType: string, t: TFunction): string {
+  return staffType === "infirmiera" ? t("staff.infirmierePlural") : t("staff.asistentePlural");
 }
 
 /** Localized role label. */

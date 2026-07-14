@@ -105,7 +105,8 @@ export default function ScheduleSetup() {
     if (cfgMax != null) setAdvancedOpen(true);
 
     const rosterById = new Map(d.setup.roster.map((r) => [r.user_id, r]));
-    const active = users.filter((u) => u.active);
+    // Only users of this schedule's staff type may be rostered.
+    const active = users.filter((u) => u.active && u.staff_type === d.staff_type);
     setRosterRows(
       active.map((u) => {
         const existing = rosterById.get(u.id);
@@ -139,6 +140,9 @@ export default function ScheduleSetup() {
     () => rosterRows.filter((r) => r.rostered).map((r) => r.user),
     [rosterRows],
   );
+
+  // Infirmiere have no kitchen and no section; hide those controls / the K request.
+  const isAide = detail?.staff_type === "infirmiera";
 
   const suggested = useMemo(() => {
     if (!detail) return 0;
@@ -281,9 +285,9 @@ export default function ScheduleSetup() {
           <thead>
             <tr>
               <th>{t("setup.rostered")}</th>
-              <th>{t("grid.nurse")}</th>
-              <th>{t("accounts.section")}</th>
-              <th>{t("setup.kitchen")}</th>
+              <th>{isAide ? t("staff.infirmiera") : t("grid.nurse")}</th>
+              {!isAide && <th>{t("accounts.section")}</th>}
+              {!isAide && <th>{t("setup.kitchen")}</th>}
             </tr>
           </thead>
           <tbody>
@@ -303,20 +307,22 @@ export default function ScheduleSetup() {
                   />
                 </td>
                 <td>{row.user.full_name}</td>
-                <td>{sectionLabel(row.user.section, t)}</td>
-                <td>
-                  <input
-                    type="checkbox"
-                    checked={row.kitchen}
-                    onChange={(e) =>
-                      setRosterRows((prev) =>
-                        prev.map((r) =>
-                          r.user.id === row.user.id ? { ...r, kitchen: e.target.checked } : r,
-                        ),
-                      )
-                    }
-                  />
-                </td>
+                {!isAide && <td>{row.user.section ? sectionLabel(row.user.section, t) : "—"}</td>}
+                {!isAide && (
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={row.kitchen}
+                      onChange={(e) =>
+                        setRosterRows((prev) =>
+                          prev.map((r) =>
+                            r.user.id === row.user.id ? { ...r, kitchen: e.target.checked } : r,
+                          ),
+                        )
+                      }
+                    />
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -331,7 +337,7 @@ export default function ScheduleSetup() {
           <table className="grid setup-matrix">
             <thead>
               <tr>
-                <th className="name-col">{t("grid.nurse")}</th>
+                <th className="name-col">{isAide ? t("staff.infirmiera") : t("grid.nurse")}</th>
                 {days.map((d) => (
                   <th
                     key={d}
@@ -388,7 +394,7 @@ export default function ScheduleSetup() {
         <table className="data-table">
           <thead>
             <tr>
-              <th>{t("grid.nurse")}</th>
+              <th>{isAide ? t("staff.infirmiera") : t("grid.nurse")}</th>
               <th>{t("request.date")}</th>
               <th>{t("request.kind")}</th>
               <th>{t("request.hard")}</th>
@@ -432,7 +438,7 @@ export default function ScheduleSetup() {
                   >
                     <option value="Z">{t("request.kindDay")}</option>
                     <option value="N">{t("request.kindNight")}</option>
-                    <option value="K">{t("request.kindKitchen")}</option>
+                    {!isAide && <option value="K">{t("request.kindKitchen")}</option>}
                     <option value="FREE">{t("request.kindFree")}</option>
                   </select>
                 </td>

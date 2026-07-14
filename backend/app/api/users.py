@@ -15,8 +15,8 @@ from ..auth.security import generate_temp_password, hash_password
 from ..config import Settings
 from ..models.schemas import (ResetPasswordOut, UserCreate, UserCreatedOut,
                               UserOrderIn, UserOut, UserUpdate)
-from ..models.tables import (ROLE_MANAGER, Approval, AssignmentRow, DayOff,
-                             ScheduleNurse, ShiftRequestRow, User)
+from ..models.tables import (ROLE_MANAGER, STAFF_AIDE, Approval, AssignmentRow,
+                             DayOff, ScheduleNurse, ShiftRequestRow, User)
 
 router = APIRouter(prefix="/api/users", tags=["users"],
                    dependencies=[Depends(require_password_changed)])
@@ -75,6 +75,7 @@ def create_user(
         must_change_password=True,
         full_name=body.full_name.strip(),
         role=body.role,
+        staff_type=body.staff_type,
         section=body.section,
         default_kitchen_capable=body.default_kitchen_capable,
         position=(max_pos or 0) + 1,
@@ -100,6 +101,17 @@ def update_user(
         raise HTTPException(400, "You cannot deactivate your own account")
     if user.id == manager.id and changes.get("role") == "nurse":
         raise HTTPException(400, "You cannot demote your own account")
+    # staff-type consistency (staff_type itself is immutable and absent from
+    # UserUpdate): the same rules UserCreate enforces must hold on update.
+    if user.staff_type == STAFF_AIDE:
+        if changes.get("role") == ROLE_MANAGER:
+            raise HTTPException(422, "An infirmiera account must keep the plain nurse role")
+        if changes.get("section") is not None:
+            raise HTTPException(422, "Infirmiere have no section (one ward-wide pool)")
+        if changes.get("default_kitchen_capable"):
+            raise HTTPException(422, "Infirmiere cannot be kitchen-capable")
+    elif "section" in changes and changes["section"] is None:
+        raise HTTPException(422, "A section (BIG or SMALL) is required for asistente")
     if changes.get("role") == ROLE_MANAGER and _manager_conflict(db, exclude_id=user.id):
         raise HTTPException(409, "There is already an active manager account")
     for field, value in changes.items():

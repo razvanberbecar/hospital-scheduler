@@ -7,14 +7,15 @@ constants added to the result.
 """
 from __future__ import annotations
 
+import copy
 import datetime as dt
 from dataclasses import dataclass, field
 
 from ortools.sat.python import cp_model
 
 from . import calendar as cal
-from .domain import (BIG, SECTION_LABEL, SMALL, Assignment, Issue, Nurse,
-                     ScheduleInput, Shift, ShiftRequest)
+from .domain import (BIG, SECTION_LABEL, SMALL, STAFF_AIDE, Assignment, Issue,
+                     Nurse, ScheduleInput, Shift, ShiftRequest)
 from .prechecks import (REQUEST_SHIFT, effective_requests,
                         per_nurse_night_minimum, run_prechecks, has_errors)
 from .validator import NurseTotals, compute_totals
@@ -69,7 +70,12 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
     if has_errors(prechecks):
         return SolveResult(status="PRECHECK_FAILED", prechecks=prechecks)
 
-    heads = [n for n in inp.nurses if n.is_head]
+    # Infirmiere (aides) are scheduled separately: no head, no kitchen; the third
+    # daily shift is an 8h daytime slot (Shift.EIGHT) instead of the kitchen (K).
+    is_aide = inp.staff_type == STAFF_AIDE
+    THIRD = Shift.EIGHT if is_aide else Shift.KITCHEN
+
+    heads = [] if is_aide else [n for n in inp.nurses if n.is_head]
     head = heads[0] if heads else None
     workers = [n for n in inp.nurses if not n.is_head]
     night_min = per_nurse_night_minimum(inp, holidays)
@@ -92,14 +98,17 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
                 continue
             x[n.id, di, Shift.DAY] = m.NewBoolVar(f"Z_{n.id}_{di}")
             x[n.id, di, Shift.NIGHT] = m.NewBoolVar(f"N_{n.id}_{di}")
-            if n.kitchen_capable:
+            if is_aide:
+                # the 8h slot exists on every calendar day (weekends/holidays too)
+                x[n.id, di, Shift.EIGHT] = m.NewBoolVar(f"E_{n.id}_{di}")
+            elif n.kitchen_capable:
                 x[n.id, di, Shift.KITCHEN] = m.NewBoolVar(f"K_{n.id}_{di}")
             if not cal.is_offday(day, holidays):
                 t4[n.id, di] = m.NewBoolVar(f"T4_{n.id}_{di}")
                 t8[n.id, di] = m.NewBoolVar(f"T8_{n.id}_{di}")
 
     def day_vars(nid: int, di: int) -> list[cp_model.IntVar]:
-        out = [x[k] for s in (Shift.DAY, Shift.NIGHT, Shift.KITCHEN) if (k := (nid, di, s)) in x]
+        out = [x[k] for s in (Shift.DAY, Shift.NIGHT, THIRD) if (k := (nid, di, s)) in x]
         for tv in (t4.get((nid, di)), t8.get((nid, di))):
             if tv is not None:
                 out.append(tv)
@@ -115,7 +124,7 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
         di = lock_index.get(lock.date)
         if di is None:
             continue
-        if lock.shift in (Shift.DAY, Shift.NIGHT, Shift.KITCHEN):
+        if lock.shift in (Shift.DAY, Shift.NIGHT, Shift.KITCHEN, Shift.EIGHT):
             v = x.get((lock.nurse_id, di, lock.shift))
             if v is not None:
                 m.Add(v == 1)
@@ -136,23 +145,35 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
             m.AddAtMostOne(tops)
 
     # --- rest rules -----------------------------------------------------------
+    # After a night, the first day is the HARD 24h floor (never worked); the
+    # second day is a penalized exception (plan 1: 48h rest, rarely overlooked).
+    # One r48 BoolVar per night counts a worked second rest day (AddAtMostOne per
+    # day already caps that day at one shift), penalized w_rest48 in the objective.
+    rest48_exc: list[cp_model.IntVar] = []
     for n in workers:
         for di in range(D):
             zd = x.get((n.id, di, Shift.DAY))
             nd = x.get((n.id, di, Shift.NIGHT))
             if zd is not None and di + 1 < D:
                 # after a day shift, the only allowed next-day shift is a night
+                # (an 8h slot behaves like K here: it may not follow a day shift)
                 for other in (x.get((n.id, di + 1, Shift.DAY)),
                               x.get((n.id, di + 1, Shift.KITCHEN)),
+                              x.get((n.id, di + 1, Shift.EIGHT)),
                               t4.get((n.id, di + 1)), t8.get((n.id, di + 1))):
                     if other is not None:
                         m.AddAtMostOne([zd, other])
             if nd is not None:
-                # after a night shift, two full days off
-                for k in (1, 2):
-                    if di + k < D:
-                        for other in day_vars(n.id, di + k):
-                            m.AddAtMostOne([nd, other])
+                if di + 1 < D:  # hard 24h floor: the day after a night is never worked
+                    for other in day_vars(n.id, di + 1):
+                        m.AddAtMostOne([nd, other])
+                if di + 2 < D:  # soft 48h: the second rest day may be worked, penalized
+                    second = day_vars(n.id, di + 2)
+                    if second:
+                        r48 = m.NewBoolVar(f"r48_{n.id}_{di}")
+                        for other in second:
+                            m.Add(other + nd <= 1 + r48)
+                        rest48_exc.append(r48)
 
     # previous-month tail blocks (rest rules across the boundary)
     first = dates[0]
@@ -161,43 +182,73 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
         last_prev = tail.get(first - dt.timedelta(days=1))
         second_prev = tail.get(first - dt.timedelta(days=2))
         if last_prev is Shift.NIGHT:
-            for di in (0, 1):
-                for v in day_vars(n.id, di):
-                    m.Add(v == 0)
-        if second_prev is Shift.NIGHT:
+            # day 0 is the hard 24h floor; day 1 is the penalized 48h exception.
             for v in day_vars(n.id, 0):
                 m.Add(v == 0)
+            d1 = day_vars(n.id, 1)
+            if d1:
+                exc = m.NewBoolVar(f"r48_tail1_{n.id}")
+                for v in d1:
+                    m.Add(v <= exc)
+                rest48_exc.append(exc)
+        if second_prev is Shift.NIGHT:
+            # a night two days before the month makes day 0 the second rest day.
+            d0 = day_vars(n.id, 0)
+            if d0:
+                exc = m.NewBoolVar(f"r48_tail0_{n.id}")
+                for v in d0:
+                    m.Add(v <= exc)
+                rest48_exc.append(exc)
         if last_prev is Shift.DAY:
             for other in (x.get((n.id, 0, Shift.DAY)), x.get((n.id, 0, Shift.KITCHEN)),
+                          x.get((n.id, 0, Shift.EIGHT)),
                           t4.get((n.id, 0)), t8.get((n.id, 0))):
                 if other is not None:
                     m.Add(other == 0)
 
-    # --- coverage: HARD per-section day/night, exactly one kitchen -----------
-    # Each day must field at least one Z from each section and one N from each
-    # section (that is how the 2Z and 2N are formed). A locked head Z/N counts
-    # as a constant toward its section's sum. Staffing caps stay TOTAL-based.
-    section_of = {n.id: n.section for n in inp.nurses}
-    for di, day in enumerate(dates):
-        zvars = [x[k] for n in workers if (k := (n.id, di, Shift.DAY)) in x]
-        nvars = [x[k] for n in workers if (k := (n.id, di, Shift.NIGHT)) in x]
-        kvars = [x[k] for n in workers if (k := (n.id, di, Shift.KITCHEN)) in x]
-        head_a = head_by_day.get(day)
-        head_shift = head_a.shift if head_a is not None else None
-        head_section = section_of.get(head_a.nurse_id) if head_a is not None else None
-        # total-based caps (head Z/N/K also occupies a slot)
-        head_z = 1 if head_shift is Shift.DAY else 0
-        head_n = 1 if head_shift is Shift.NIGHT else 0
-        head_k = 1 if head_shift is Shift.KITCHEN else 0
-        m.Add(sum(zvars) + head_z <= 2 + cfg.extra_day_cap)
-        m.Add(sum(nvars) + head_n <= 2 + cfg.extra_night_cap)
-        m.Add(sum(kvars) + head_k == 1)
-        for slot, shift, head_here in (("day", Shift.DAY, head_z), ("night", Shift.NIGHT, head_n)):
-            for section in (BIG, SMALL):
-                pool = [x[k] for n in workers
-                        if n.section == section and (k := (n.id, di, shift)) in x]
-                const = head_here if head_section == section else 0
-                m.Add(sum(pool) + const >= 1)
+    # --- coverage -------------------------------------------------------------
+    swap_terms: list[cp_model.IntVar] = []
+    if is_aide:
+        # Infirmiere daily coverage (HARD): 1 Z + 1 N + 1 x 8h. The swap exception
+        # (penalized) turns the 8h slot into a second Z -> 2 Z + 1 N, used only when
+        # leave/hour targets force it.
+        for di, day in enumerate(dates):
+            zvars = [x[k] for n in workers if (k := (n.id, di, Shift.DAY)) in x]
+            nvars = [x[k] for n in workers if (k := (n.id, di, Shift.NIGHT)) in x]
+            evars = [x[k] for n in workers if (k := (n.id, di, Shift.EIGHT)) in x]
+            swap = m.NewBoolVar(f"swap_{di}")
+            m.Add(sum(evars) == 1 - swap)
+            m.Add(sum(zvars) >= 1 + swap)
+            m.Add(sum(nvars) >= 1)
+            m.Add(sum(zvars) <= 1 + swap + cfg.extra_day_cap)
+            m.Add(sum(nvars) <= 1 + cfg.extra_night_cap)
+            swap_terms.append(swap)
+    else:
+        # HARD per-section day/night, exactly one kitchen. Each day must field at
+        # least one Z from each section and one N from each section (that is how
+        # the 2Z and 2N are formed). A locked head Z/N counts as a constant toward
+        # its section's sum. Staffing caps stay TOTAL-based.
+        section_of = {n.id: n.section for n in inp.nurses}
+        for di, day in enumerate(dates):
+            zvars = [x[k] for n in workers if (k := (n.id, di, Shift.DAY)) in x]
+            nvars = [x[k] for n in workers if (k := (n.id, di, Shift.NIGHT)) in x]
+            kvars = [x[k] for n in workers if (k := (n.id, di, Shift.KITCHEN)) in x]
+            head_a = head_by_day.get(day)
+            head_shift = head_a.shift if head_a is not None else None
+            head_section = section_of.get(head_a.nurse_id) if head_a is not None else None
+            # total-based caps (head Z/N/K also occupies a slot)
+            head_z = 1 if head_shift is Shift.DAY else 0
+            head_n = 1 if head_shift is Shift.NIGHT else 0
+            head_k = 1 if head_shift is Shift.KITCHEN else 0
+            m.Add(sum(zvars) + head_z <= 2 + cfg.extra_day_cap)
+            m.Add(sum(nvars) + head_n <= 2 + cfg.extra_night_cap)
+            m.Add(sum(kvars) + head_k == 1)
+            for slot, shift, head_here in (("day", Shift.DAY, head_z), ("night", Shift.NIGHT, head_n)):
+                for section in (BIG, SMALL):
+                    pool = [x[k] for n in workers
+                            if n.section == section and (k := (n.id, di, shift)) in x]
+                    const = head_here if head_section == section else 0
+                    m.Add(sum(pool) + const >= 1)
 
     # --- night minimums --------------------------------------------------------
     nights_of: dict[int, cp_model.IntVar] = {}
@@ -235,7 +286,7 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
     for n in workers:
         n_terms, w_terms = [], []
         for di, day in enumerate(dates):
-            for s in (Shift.DAY, Shift.NIGHT, Shift.KITCHEN):
+            for s in (Shift.DAY, Shift.NIGHT, THIRD):
                 v = x.get((n.id, di, s))
                 if v is None:
                     continue
@@ -313,6 +364,10 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
         objective_terms.append(cfg.w_kitchen_run * sum(kitchen_run_exc))
     if cluster_exc:
         objective_terms.append(cfg.w_cluster * sum(cluster_exc))
+    if swap_terms:
+        objective_terms.append(cfg.w_eight_swap * sum(swap_terms))
+    if rest48_exc:
+        objective_terms.append(cfg.w_rest48 * sum(rest48_exc))
     m.Minimize(sum(objective_terms))
 
     solver = cp_model.CpSolver()
@@ -325,13 +380,18 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         result = SolveResult(status=status_name, prechecks=prechecks)
         if status == cp_model.INFEASIBLE:
-            result.diagnosis = _diagnose(inp, holidays, night_min)
+            # Plan 2 (A): if must-have requests were in play, first try to explain
+            # which ones cannot hold; fall back to the coverage diagnosis otherwise.
+            hard_reqs = [r for r in kept_requests if r.hard]
+            explained = _explain_hard_requests(inp, hard_reqs) if hard_reqs else None
+            result.diagnosis = explained if explained is not None \
+                else _diagnose(inp, holidays, night_min)
         return result
 
     assignments: list[Assignment] = []
     for n in workers:
         for di, day in enumerate(dates):
-            for s in (Shift.DAY, Shift.NIGHT, Shift.KITCHEN):
+            for s in (Shift.DAY, Shift.NIGHT, THIRD):
                 v = x.get((n.id, di, s))
                 if v is not None and solver.Value(v):
                     dur = cal.duration_of(s)
@@ -363,12 +423,39 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
     )
 
 
+def _explain_hard_requests(inp: ScheduleInput,
+                           hard_reqs: list[ShiftRequest]) -> list[str] | None:
+    """Plan 2 (A): the run was INFEASIBLE with must-have requests. Re-solve once
+    with every request soft and w_request enormous, so denials happen only when
+    unavoidable and the denied set is the minimal explanation. Returns the
+    diagnosis lines, or None if even the all-soft retry is infeasible (the caller
+    then falls back to the coverage diagnosis). The retry has no hard requests, so
+    it cannot recurse into this path."""
+    retry = copy.deepcopy(inp)
+    retry.requests = [ShiftRequest(r.nurse_id, r.date, r.kind, hard=False)
+                      for r in inp.requests]
+    retry.config.w_request = 1_000_000
+    res = solve(retry, skip_prechecks=True)
+    if not res.ok:
+        return None
+    denied = {(r.nurse_id, r.date, r.kind) for r, granted in res.requests if not granted}
+    by_id = {n.id: n for n in inp.nurses}
+    lines = ["The must-have requests cannot all be honored; a valid schedule "
+             "exists without these:"]
+    for r in hard_reqs:
+        if (r.nurse_id, r.date, r.kind) in denied:
+            lines.append(f"{by_id[r.nurse_id].name}: {r.kind} on {r.date}")
+    return lines
+
+
 def _diagnose(inp: ScheduleInput, holidays: set[dt.date],
               night_min: dict[int, tuple[int, bool]]) -> list[str]:
-    """Slack-based infeasibility diagnosis (plan 6.6): re-solve with the
-    per-section coverage minimums soft and report the day+section slots that
-    needed slack."""
+    """Slack-based infeasibility diagnosis (plan 6.6): re-solve with the daily
+    coverage minimums soft and report the day+slot that needed slack. For
+    infirmiere the slots are Z/N/8 (the swap exception folds into the Z slack)."""
     cfg = inp.config
+    is_aide = inp.staff_type == STAFF_AIDE
+    THIRD = Shift.EIGHT if is_aide else Shift.KITCHEN
     dates = cal.month_dates(inp.year, inp.month)
     workers = [n for n in inp.nurses if not n.is_head]
     m = cp_model.CpModel()
@@ -379,34 +466,76 @@ def _diagnose(inp: ScheduleInput, holidays: set[dt.date],
                 continue
             x[n.id, di, Shift.DAY] = m.NewBoolVar(f"Z_{n.id}_{di}")
             x[n.id, di, Shift.NIGHT] = m.NewBoolVar(f"N_{n.id}_{di}")
-            if n.kitchen_capable:
+            if is_aide:
+                x[n.id, di, Shift.EIGHT] = m.NewBoolVar(f"E_{n.id}_{di}")
+            elif n.kitchen_capable:
                 x[n.id, di, Shift.KITCHEN] = m.NewBoolVar(f"K_{n.id}_{di}")
+
+    # Plan 3 (B): respect locks so a manager-covered day is not reported short.
+    # The head has no variables; her locked Z/N/K fold into the coverage sums as
+    # constants (below), while worker locks pin the matching variable when present.
+    heads = [] if is_aide else [n for n in inp.nurses if n.is_head]
+    head = heads[0] if heads else None
+    head_by_day: dict[dt.date, Assignment] = {}
+    if head is not None:
+        for a in _head_assignments(inp, head, holidays):
+            head_by_day[a.date] = a
+    lock_index = {day: di for di, day in enumerate(dates)}
+    for lock in inp.locks:
+        di = lock_index.get(lock.date)
+        if di is None:
+            continue
+        if lock.shift in (Shift.DAY, Shift.NIGHT, Shift.KITCHEN, Shift.EIGHT):
+            v = x.get((lock.nurse_id, di, lock.shift))
+            if v is not None:
+                m.Add(v == 1)
+
     for n in workers:
         for di in range(D := len(dates)):
-            vs = [x[k] for s in (Shift.DAY, Shift.NIGHT, Shift.KITCHEN) if (k := (n.id, di, s)) in x]
+            vs = [x[k] for s in (Shift.DAY, Shift.NIGHT, THIRD) if (k := (n.id, di, s)) in x]
             if vs:
                 m.AddAtMostOne(vs)
             nd = x.get((n.id, di, Shift.NIGHT))
-            if nd is not None:
-                for k_ in (1, 2):
-                    if di + k_ < D:
-                        for s in (Shift.DAY, Shift.NIGHT, Shift.KITCHEN):
-                            other = x.get((n.id, di + k_, s))
-                            if other is not None:
-                                m.AddAtMostOne([nd, other])
+            if nd is not None and di + 1 < D:
+                # only the hard 24h floor here; the 48h second day is now a soft
+                # exception (plan 1), so this relaxation drops the di+2 block.
+                for s in (Shift.DAY, Shift.NIGHT, THIRD):
+                    other = x.get((n.id, di + 1, s))
+                    if other is not None:
+                        m.AddAtMostOne([nd, other])
     slacks = []
-    for di, day in enumerate(dates):
-        for label, s in (("day", Shift.DAY), ("night", Shift.NIGHT)):
-            for section in (BIG, SMALL):
-                pool = [x[k] for n in workers
-                        if n.section == section and (k := (n.id, di, s)) in x]
-                sl = m.NewIntVar(0, 1, f"slack_{label}_{section}_{di}")
+    if is_aide:
+        for di, day in enumerate(dates):
+            for label, s in (("day (Z)", Shift.DAY), ("night (N)", Shift.NIGHT),
+                             ("8h", Shift.EIGHT)):
+                pool = [x[k] for n in workers if (k := (n.id, di, s)) in x]
+                sl = m.NewIntVar(0, 1, f"slack_{s.value}_{di}")
                 m.Add(sum(pool) + sl >= 1)
-                slacks.append((day, f"{label} {SECTION_LABEL[section]}", sl, 1))
-        kpool = [x[k] for n in workers if (k := (n.id, di, Shift.KITCHEN)) in x]
-        ksl = m.NewIntVar(0, 1, f"slack_kitchen_{di}")
-        m.Add(sum(kpool) + ksl >= 1)
-        slacks.append((day, "kitchen", ksl, 1))
+                slacks.append((day, label, sl, 1))
+    else:
+        # A locked head Z/N counts toward its section's sum; a locked head K
+        # toward the kitchen sum (plan 3), so a head-covered day is not flagged.
+        section_of = {n.id: n.section for n in inp.nurses}
+        for di, day in enumerate(dates):
+            head_a = head_by_day.get(day)
+            head_shift = head_a.shift if head_a is not None else None
+            head_section = section_of.get(head_a.nurse_id) if head_a is not None else None
+            head_z = 1 if head_shift is Shift.DAY else 0
+            head_n = 1 if head_shift is Shift.NIGHT else 0
+            head_k = 1 if head_shift is Shift.KITCHEN else 0
+            for label, s, head_here in (("day", Shift.DAY, head_z),
+                                        ("night", Shift.NIGHT, head_n)):
+                for section in (BIG, SMALL):
+                    pool = [x[k] for n in workers
+                            if n.section == section and (k := (n.id, di, s)) in x]
+                    const = head_here if head_section == section else 0
+                    sl = m.NewIntVar(0, 1, f"slack_{label}_{section}_{di}")
+                    m.Add(sum(pool) + const + sl >= 1)
+                    slacks.append((day, f"{label} {SECTION_LABEL[section]}", sl, 1))
+            kpool = [x[k] for n in workers if (k := (n.id, di, Shift.KITCHEN)) in x]
+            ksl = m.NewIntVar(0, 1, f"slack_kitchen_{di}")
+            m.Add(sum(kpool) + head_k + ksl >= 1)
+            slacks.append((day, "kitchen", ksl, 1))
     m.Minimize(sum(sl for *_, sl, _n in slacks))
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = min(10.0, cfg.max_time_s)

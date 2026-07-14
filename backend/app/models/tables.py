@@ -18,6 +18,11 @@ from ..db import Base
 ROLE_NURSE = "nurse"
 ROLE_MANAGER = "manager_nurse"
 
+# Staff types scheduled separately (see solver.domain). Kept as literals here to
+# avoid importing the solver into the ORM layer.
+STAFF_NURSE = "asistenta"
+STAFF_AIDE = "infirmiera"
+
 STATUS_DRAFT = "draft"
 STATUS_APPROVED = "approved"
 STATUS_LOCKED = "locked"
@@ -32,7 +37,9 @@ class User(Base):
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
     full_name: Mapped[str] = mapped_column(String(100))
     role: Mapped[str] = mapped_column(String(20), default=ROLE_NURSE)   # nurse | manager_nurse
-    section: Mapped[str] = mapped_column(String(10))                    # BIG | SMALL
+    # asistenta -> section required BIG|SMALL; infirmiera -> section NULL, one pool.
+    staff_type: Mapped[str] = mapped_column(String(12), default=STAFF_NURSE)
+    section: Mapped[str | None] = mapped_column(String(10), nullable=True)  # BIG | SMALL | None
     default_kitchen_capable: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Manager-controlled display order for the schedule grid / GRAFIC export.
@@ -58,11 +65,15 @@ class Schedule(Base):
     rest rules, config partial solver Config overrides (e.g. {"max_time_s": 10}).
     Months no longer carry hour balances between each other."""
     __tablename__ = "schedules"
-    __table_args__ = (UniqueConstraint("year", "month", name="uq_schedule_month"),)
+    # One schedule per (year, month, staff_type): asistente and infirmiere have
+    # fully separate draft->approved->locked lifecycles.
+    __table_args__ = (UniqueConstraint("year", "month", "staff_type",
+                                       name="uq_schedule_month_staff"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     year: Mapped[int] = mapped_column(Integer)
     month: Mapped[int] = mapped_column(Integer)
+    staff_type: Mapped[str] = mapped_column(String(12), default=STAFF_NURSE)
     target_hours: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(10), default=STATUS_DRAFT)
     prev_tail: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -116,7 +127,7 @@ class AssignmentRow(Base):
     schedule_id: Mapped[int] = mapped_column(ForeignKey("schedules.id"), index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     date: Mapped[dt.date] = mapped_column(Date)
-    shift: Mapped[str] = mapped_column(String(1))            # Z | N | K | H | T
+    shift: Mapped[str] = mapped_column(String(1))            # Z | N | K | H | T | 8
     duration_hours: Mapped[int] = mapped_column(Integer)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     normal_hours: Mapped[int] = mapped_column(Integer)

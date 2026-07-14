@@ -4,10 +4,11 @@ from __future__ import annotations
 import datetime as dt
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Role = Literal["nurse", "manager_nurse"]
 Section = Literal["BIG", "SMALL"]
+StaffType = Literal["asistenta", "infirmiera"]
 
 
 class LoginIn(BaseModel):
@@ -43,7 +44,8 @@ class UserOut(BaseModel):
     username: str
     full_name: str
     role: Role
-    section: Section
+    staff_type: StaffType
+    section: Section | None
     default_kitchen_capable: bool
     active: bool
     must_change_password: bool
@@ -55,9 +57,25 @@ class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=50, pattern=r"^[a-zA-Z0-9._-]+$")
     full_name: str = Field(min_length=2, max_length=100)
     role: Role = "nurse"
-    section: Section
+    staff_type: StaffType = "asistenta"
+    section: Section | None = None
     default_kitchen_capable: bool = False
     temporary_password: str | None = Field(default=None, min_length=8, max_length=100)
+
+    @model_validator(mode="after")
+    def _check_staff_type(self) -> "UserCreate":
+        # asistenta => section required BIG|SMALL. infirmiera => one ward-wide
+        # pool (section must be null), no kitchen, role always plain nurse
+        # (a manager is always an asistenta). staff_type is immutable afterwards.
+        if self.staff_type == "infirmiera":
+            if self.section is not None:
+                raise ValueError("Infirmiere have no section (one ward-wide pool)")
+            if self.role != "nurse":
+                raise ValueError("An infirmiera account must have the plain nurse role")
+            object.__setattr__(self, "default_kitchen_capable", False)
+        elif self.section is None:
+            raise ValueError("A section (BIG or SMALL) is required for asistente")
+        return self
 
 
 class UserCreatedOut(BaseModel):
@@ -92,8 +110,8 @@ class HolidaysPut(BaseModel):
 
 
 # --- schedules (M3) --------------------------------------------------------
-RequestKind = Literal["Z", "N", "K", "FREE"]
-EditShift = Literal["Z", "N", "K", "T", "H"]  # H only valid for the head nurse
+RequestKind = Literal["Z", "N", "K", "FREE"]  # K rejected on infirmiere schedules
+EditShift = Literal["Z", "N", "K", "T", "H", "8"]  # H head-only; "8" infirmiere-only
 ScheduleStatus = Literal["draft", "approved", "locked"]
 
 
@@ -117,6 +135,7 @@ class RequestIn(BaseModel):
 class ScheduleCreate(BaseModel):
     year: int = Field(ge=2000, le=2100)
     month: int = Field(ge=1, le=12)
+    staff_type: StaffType = "asistenta"
     target_hours: int = Field(ge=0)
     roster: list[RosterItemIn] = Field(default_factory=list)
     days_off: list[DayOffIn] = Field(default_factory=list)
@@ -153,6 +172,7 @@ class ScheduleListItem(BaseModel):
     id: int
     year: int
     month: int
+    staff_type: StaffType
     status: ScheduleStatus
     target_hours: int
     approval_count: int
@@ -161,7 +181,7 @@ class ScheduleListItem(BaseModel):
 class RosterEntryOut(BaseModel):
     user_id: int
     full_name: str
-    section: Section
+    section: Section | None
     role: Role
     kitchen_capable: bool
 
@@ -217,18 +237,24 @@ class IssueOut(BaseModel):
 
 
 class DayCoverageOut(BaseModel):
+    # All coverage fields are optional with a default so one schema fits both
+    # shapes: asistente report Z_big/Z_small/N_big/N_small/K; infirmiere Z/N/E8.
     date: dt.date
-    Z_big: int
-    Z_small: int
-    N_big: int
-    N_small: int
-    K: int
+    Z_big: int | None = None
+    Z_small: int | None = None
+    N_big: int | None = None
+    N_small: int | None = None
+    K: int | None = None
+    Z: int | None = None
+    N: int | None = None
+    E8: int | None = None
 
 
 class ScheduleDetailOut(BaseModel):
     id: int
     year: int
     month: int
+    staff_type: StaffType
     status: ScheduleStatus
     setup: SetupOut
     assignments: list[AssignmentOut]

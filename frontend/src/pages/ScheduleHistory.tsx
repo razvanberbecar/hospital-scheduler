@@ -169,6 +169,7 @@ export default function ScheduleHistory() {
                 totals={snapTotals}
                 perDay={[]}
                 holidays={holidays}
+                staffType={detail.staff_type}
               />
             </>
           )}

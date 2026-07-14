@@ -183,6 +183,32 @@ def test_determinism_same_seed_same_schedule():
     assert a.assignments == b.assignments
 
 
+def test_unconstrained_month_uses_no_rest48_exceptions(july_result):
+    """Plan 1: with no leave pressure the solver never bends the 48h rest, so
+    the validator reports no rest48_exception warnings."""
+    inp, res = july_result
+    report = validate(inp, res.assignments)
+    assert "rest48_exception" not in {w.code for w in report.warnings}
+
+
+def test_section_crunch_forces_a_rest48_exception():
+    """Plan 1: a section squeezed to 3 available nurses for three consecutive days
+    is INFEASIBLE under the old hard 48h rule but now SOLVES by taking at least one
+    penalized 48h exception - a warning, never a violation."""
+    holidays = JULY_HOLIDAYS
+    workdays = [d for d in cal.month_dates(2026, 7) if not cal.is_offday(d, holidays)]
+    crunch = workdays[6:9]  # three consecutive working days
+    # BIG workers are ids 1..7; put four of them on Co across the crunch so only
+    # three BIG nurses remain to field 1 Z + 1 N each of the three days.
+    leave = {nid: set(crunch) for nid in (1, 2, 3, 4)}
+    inp = july_input(leave=leave)
+    res = solve(inp)
+    assert res.ok, (res.status, res.diagnosis, [i.message for i in res.prechecks])
+    report = validate(inp, res.assignments)
+    assert report.ok, [v.message for v in report.violations]
+    assert "rest48_exception" in {w.code for w in report.warnings}
+
+
 def test_validator_flags_missing_section_day_coverage():
     """Change 1: a day with two BIG day nurses and no SMALL day nurse breaks the
     HARD per-section rule -> coverage_day_section violation, and per_day carries

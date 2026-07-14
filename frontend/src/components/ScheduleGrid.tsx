@@ -13,6 +13,7 @@ import type {
   NurseTotalsOut,
   RosterEntryOut,
   SnapshotAssignment,
+  StaffType,
 } from "../api/types";
 import { dayOf, isWeekend } from "../lib/dates";
 import { cellView, sectionLabel } from "../lib/schedule";
@@ -23,12 +24,13 @@ export interface ScheduleGridProps {
   year: number;
   month: number;
   days: string[]; // ISO dates, in order
-  roster: RosterEntryOut[]; // pre-sorted BIG then SMALL
+  roster: RosterEntryOut[]; // pre-sorted BIG then SMALL (one pool for infirmiere)
   assignments: GridAssignment[];
   daysOff: DayOffIn[]; // empty for snapshots
   totals: NurseTotalsOut[];
   perDay: DayCoverageOut[]; // empty for snapshots (no coverage rows then)
   holidays: Set<string>;
+  staffType?: StaffType; // "infirmiera" -> one band, Z/N/8 coverage
   onCellClick?: (userId: number, date: string) => void; // editing entry point
   activeCell?: { userId: number; date: string } | null;
 }
@@ -53,9 +55,11 @@ export default function ScheduleGrid(props: ScheduleGridProps) {
     totals,
     perDay,
     holidays,
+    staffType,
     onCellClick,
     activeCell,
   } = props;
+  const isAide = staffType === "infirmiera";
 
   // Fast lookups.
   const asgMap = new Map<string, GridAssignment>();
@@ -67,8 +71,9 @@ export default function ScheduleGrid(props: ScheduleGridProps) {
   const coverageMap = new Map<string, DayCoverageOut>();
   for (const c of perDay) coverageMap.set(c.date, c);
 
-  // Group the (already sorted) roster by section, preserving order.
-  const groups: { section: string; nurses: RosterEntryOut[] }[] = [];
+  // Group the (already sorted) roster by section, preserving order. Infirmiere
+  // have no section (null) so they form a single band.
+  const groups: { section: string | null; nurses: RosterEntryOut[] }[] = [];
   for (const n of roster) {
     let g = groups[groups.length - 1];
     if (!g || g.section !== n.section) {
@@ -93,7 +98,7 @@ export default function ScheduleGrid(props: ScheduleGridProps) {
         <thead>
           <tr>
             <th className="name-col" rowSpan={2}>
-              {t("grid.nurse")}
+              {isAide ? t("staff.infirmiera") : t("grid.nurse")}
             </th>
             {days.map((d) => (
               <th key={d} className={`day-col ${dayClass(d)}`}>
@@ -139,7 +144,9 @@ export default function ScheduleGrid(props: ScheduleGridProps) {
             // collide.
             <Fragment key={`sec-${gi}-${g.section}`}>
               <tr className="section-row">
-                <td className="name-col section-label">{sectionLabel(g.section, t)}</td>
+                <td className="name-col section-label">
+                  {g.section == null ? t("staff.infirmierePlural") : sectionLabel(g.section, t)}
+                </td>
                 <td colSpan={days.length + totalColSpan} className="section-fill" />
               </tr>
               {g.nurses.map((n) => {
@@ -197,7 +204,35 @@ export default function ScheduleGrid(props: ScheduleGridProps) {
               })}
             </Fragment>
           ))}
-          {showCoverage && (
+          {showCoverage && isAide && (
+            <>
+              <CoverageRow
+                label={t("coverage.day")}
+                days={days}
+                dayClass={dayClass}
+                value={(d) => coverageMap.get(d)?.Z ?? 0}
+                bad={(v) => v < 1}
+                totalColSpan={totalColSpan}
+              />
+              <CoverageRow
+                label={t("coverage.night")}
+                days={days}
+                dayClass={dayClass}
+                value={(d) => coverageMap.get(d)?.N ?? 0}
+                bad={(v) => v < 1}
+                totalColSpan={totalColSpan}
+              />
+              <CoverageRow
+                label={t("coverage.eight")}
+                days={days}
+                dayClass={dayClass}
+                value={(d) => coverageMap.get(d)?.E8 ?? 0}
+                bad={(v) => v > 1}
+                totalColSpan={totalColSpan}
+              />
+            </>
+          )}
+          {showCoverage && !isAide && (
             <>
               <CoverageRow
                 label={t("coverage.dayBig")}
