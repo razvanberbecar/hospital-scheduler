@@ -4,8 +4,10 @@ registration endpoint.
 Usage:
     python -m app.manage create-manager --username anca.berbecar --name "Berbecar Anca" --section SMALL
     python -m app.manage create-user --username maria.pop --name "Pop Maria" --section BIG [--kitchen] [--role nurse]
+    python -m app.manage set-password --username anca.berbecar --password anca.berbecar
 
-Prints the generated temporary password; the account must change it at first login.
+Prints the generated temporary password; the account must change it at first login
+(set-password clears the forced change so the new password works immediately).
 """
 from __future__ import annotations
 
@@ -52,6 +54,31 @@ def _create(role: str, args: argparse.Namespace) -> int:
         session.close()
 
 
+def _set_password(args: argparse.Namespace) -> int:
+    """Set a known password on an EXISTING account (startup seeding never touches
+    a non-empty database, so moved/older installs use this to claim the admin
+    credentials). Clears must_change_password so the login works immediately."""
+    settings = Settings()
+    engine = make_engine(settings.database_url)
+    session = make_sessionmaker(engine)()
+    try:
+        username = args.username.strip().lower()
+        user = session.scalar(select(User).where(User.username == username))
+        if user is None:
+            print(f"ERROR: no account '{username}'")
+            return 1
+        if len(args.password) < 8:
+            print("ERROR: password must be at least 8 characters")
+            return 1
+        user.password_hash = hash_password(args.password, settings.bcrypt_rounds)
+        user.must_change_password = False
+        session.commit()
+        print(f"Password set for '{username}'")
+        return 0
+    finally:
+        session.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Hospital Scheduling account seeding")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -70,7 +97,13 @@ def main(argv: list[str] | None = None) -> int:
     nurse.add_argument("--kitchen", action="store_true")
     nurse.add_argument("--password", default=None)
 
+    setpw = sub.add_parser("set-password", help="set a password on an existing account")
+    setpw.add_argument("--username", required=True)
+    setpw.add_argument("--password", required=True)
+
     args = parser.parse_args(argv)
+    if args.command == "set-password":
+        return _set_password(args)
     role = ROLE_MANAGER if args.command == "create-manager" else ROLE_NURSE
     return _create(role, args)
 

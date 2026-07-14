@@ -197,7 +197,10 @@ def test_section_crunch_forces_a_rest48_exception():
     penalized 48h exception - a warning, never a violation."""
     holidays = JULY_HOLIDAYS
     workdays = [d for d in cal.month_dates(2026, 7) if not cal.is_offday(d, holidays)]
-    crunch = workdays[6:9]  # three consecutive working days
+    # three consecutive CALENDAR days (Mon-Wed July 6-8): a weekend gap inside
+    # the window would hand out free rest days and no exception would be needed
+    crunch = workdays[3:6]
+    assert [d.day for d in crunch] == [6, 7, 8]
     # BIG workers are ids 1..7; put four of them on Co across the crunch so only
     # three BIG nurses remain to field 1 Z + 1 N each of the three days.
     leave = {nid: set(crunch) for nid in (1, 2, 3, 4)}
