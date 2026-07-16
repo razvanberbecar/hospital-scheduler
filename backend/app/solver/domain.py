@@ -118,6 +118,19 @@ class ScheduleInput:
     def leave_of(self, nurse_id: int) -> set[dt.date]:
         return self.leave.get(nurse_id, set())
 
+    def blocked_of(self, nurse_id: int, holidays: set[dt.date]) -> set[dt.date]:
+        """Off days bracketed by this nurse's own Co on both sides (see
+        calendar.bridged_offdays): she is away across them, so they are
+        unworkable. Unlike leave_of they earn no credit and are derived, never
+        stored - days_off stays the single source of truth."""
+        from . import calendar as cal  # local: calendar imports domain
+        return cal.bridged_offdays(self.year, self.month, holidays, self.leave_of(nurse_id))
+
+    def unavailable_of(self, nurse_id: int, holidays: set[dt.date]) -> set[dt.date]:
+        """Every day the nurse cannot be given a shift: her leave plus the off
+        days her leave bridges."""
+        return self.leave_of(nurse_id) | self.blocked_of(nurse_id, holidays)
+
 
 @dataclass(frozen=True)
 class Assignment:

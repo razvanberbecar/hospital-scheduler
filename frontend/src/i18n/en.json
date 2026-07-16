@@ -80,7 +80,7 @@
   },
   "grid": {
     "nurse": "Nurse",
-    "coInSetup": "Leave days (Co) are edited in Setup"
+    "coBridge": "On leave (Co) either side of this weekend - away across it, cannot be scheduled"
   },
   "totals": {
     "total": "Total",
@@ -115,7 +115,8 @@
     "eight": "8 — 8h day shift",
     "t": "4/8 — top-up",
     "co": "Co — leave day",
-    "locked": "locked cell"
+    "locked": "locked cell",
+    "blocked": "away across a Co weekend"
   },
   "detail": {
     "month": "Month",
@@ -173,7 +174,9 @@
     "head": "head",
     "eight": "8h shift",
     "clear": "Clear",
-    "locked": "locked cell"
+    "locked": "locked cell",
+    "co": "Co",
+    "coWorkdaysOnly": "Leave (Co) is only allowed on Monday-Friday working days"
   },
   "setup": {
     "title": "Schedule setup",

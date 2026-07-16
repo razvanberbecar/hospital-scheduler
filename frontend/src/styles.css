@@ -632,6 +632,17 @@ select {
 .c-co {
   background: #fbf3cf;
 }
+/* Off day bracketed by Co on both sides: she is away across it. Hatched rather
+   than tinted - it holds no shift and, unlike Co, earns nothing. */
+.c-blocked {
+  background: repeating-linear-gradient(
+    45deg,
+    #f4f1e4,
+    #f4f1e4 3px,
+    #e6e1cc 3px,
+    #e6e1cc 6px
+  );
+}
 
 .coverage-row td {
   border-top: 2px solid #cdd9e6;
@@ -726,6 +737,12 @@ select {
 .chip.danger {
   border-color: #b3261e;
   color: #b3261e;
+}
+
+/* The cell's current value, e.g. Co on a leave day: shown pressed and disabled. */
+.chip.chip-on {
+  background: #16528e;
+  color: #fff;
 }
 
 .chip.static {

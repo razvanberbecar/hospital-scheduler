@@ -38,7 +38,8 @@ def max_nights_fitting(inp: ScheduleInput, nurse: Nurse, holidays: set[dt.date])
     day-availability is considered here; the hours cap is applied separately.
     """
     dates = cal.month_dates(inp.year, inp.month)
-    unavailable = set(inp.leave_of(nurse.id)) | _blocked_first_days(inp, nurse.id)
+    unavailable = (inp.unavailable_of(nurse.id, holidays)
+                   | _blocked_first_days(inp, nurse.id))
     count = 0
     i = 0
     while i < len(dates):
@@ -126,8 +127,11 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
             pool = [n for n in inp.nurses if n.section == section]  # incl. head
             if not pool:
                 continue
+            # Hoisted: unavailable_of re-derives the bridges from scratch, and
+            # these checks are meant to be instant.
+            off = {n.id: inp.unavailable_of(n.id, holidays) for n in pool}
             for day in dates:
-                available = [n for n in pool if day not in inp.leave_of(n.id)]
+                available = [n for n in pool if day not in off[n.id]]
                 if not available:
                     issues.append(Issue("error", "section_unavailable",
                                         f"{SECTION_LABEL[section]}: every nurse in this section is on leave "
@@ -170,7 +174,9 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
         else:
             capacity = 0
             for n in kitchen_pool:
-                by_days = days - len(inp.leave_of(n.id))
+                # The kitchen runs weekends too, so a Co-bridged weekend costs
+                # her those days as well - hours, though, only Co credits.
+                by_days = days - len(inp.unavailable_of(n.id, holidays))
                 by_hours = (inp.effective_target(n.id) - 8 * len(inp.leave_of(n.id)) + cfg.band) // 8
                 capacity += max(0, min(by_days, by_hours))
             if capacity < days:
@@ -213,7 +219,10 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
     for n in workers:
         co = len(inp.leave_of(n.id))
         required = inp.effective_target(n.id) - 8 * co
-        available_days = days - co - len(_blocked_first_days(inp, n.id))
+        # Set difference, not arithmetic: leave, bridged off days and the
+        # prev-tail block can overlap and must not be subtracted twice.
+        off_limits = inp.unavailable_of(n.id, holidays) | _blocked_first_days(inp, n.id)
+        available_days = sum(1 for d in dates if d not in off_limits)
         if available_days * 12 + cfg.band < required:
             issues.append(Issue("error", "nurse_unreachable",
                                 f"{n.name}: needs {required}h worked but only {available_days} available days "
@@ -236,7 +245,7 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
                                 nurse_id=h.id))
 
     # --- leave crunches (plan 4: relaxed-rule thresholds) ---------------------
-    issues.extend(_leave_crunch_issues(inp))
+    issues.extend(_leave_crunch_issues(inp, holidays))
 
     # --- shift requests -------------------------------------------------------
     issues.extend(effective_requests(inp)[1])
@@ -255,23 +264,25 @@ def _runs(indices: list[int]) -> list[list[int]]:
     return runs
 
 
-def _leave_crunch_issues(inp: ScheduleInput) -> list[Issue]:
+def _leave_crunch_issues(inp: ScheduleInput, holidays: set[dt.date]) -> list[Issue]:
     """Instant leave-crunch prechecks with plain-language messages (plan 4).
 
     The thresholds are derived for the RELAXED 48h rule (the 24h floor is still
     hard): each day needs two distinct people to field Z+N, and because a night
     blocks the next day, two people cannot cover two consecutive days. Availability
-    is the section's non-head workers not on Co that day; a locked head Z/N counts
-    as one more available person that day (lock-aware, so the head-cover workaround
-    is not blocked). Infirmiere are pool-wide: three distinct people every day.
+    is the section's non-head workers who are neither on Co that day nor away
+    across a Co-bridged weekend; a locked head Z/N counts as one more available
+    person that day (lock-aware, so the head-cover workaround is not blocked).
+    Infirmiere are pool-wide: three distinct people every day.
     """
     dates = cal.month_dates(inp.year, inp.month)
     workers = [n for n in inp.nurses if not n.is_head]
+    off = {w.id: inp.unavailable_of(w.id, holidays) for w in workers}
     issues: list[Issue] = []
 
     if inp.staff_type == STAFF_AIDE:
         short = [i for i, day in enumerate(dates)
-                 if sum(1 for w in workers if day not in inp.leave_of(w.id)) < 3]
+                 if sum(1 for w in workers if day not in off[w.id]) < 3]
         for run in _runs(short):
             span = _span(dates, run)
             issues.append(Issue("error", "infirmiere_leave_crunch",
@@ -293,7 +304,7 @@ def _leave_crunch_issues(inp: ScheduleInput) -> list[Issue]:
         head_here = head is not None and head.section == section
         avail: list[set[int]] = []
         for day in dates:
-            people = {w.id for w in sec_workers if day not in inp.leave_of(w.id)}
+            people = {w.id for w in sec_workers if day not in off[w.id]}
             if head_here and day in head_lock_days:
                 people.add(head.id)
             avail.append(people)
@@ -356,7 +367,10 @@ def effective_requests(inp: ScheduleInput) -> tuple[list[ShiftRequest], list[Iss
     slots, rest-rule clashes) are always errors with named messages.
     """
     issues: list[Issue] = []
+    holidays = inp.holidays if inp.holidays is not None \
+        else cal.default_holidays(inp.year, inp.month)
     by_id = {n.id: n for n in inp.nurses}
+    blocked = {n.id: inp.blocked_of(n.id, holidays) for n in inp.nurses}
     kept: list[ShiftRequest] = []
     seen: dict[tuple[int, dt.date], str] = {}
     for r in inp.requests:
@@ -384,6 +398,15 @@ def effective_requests(inp: ScheduleInput) -> tuple[list[ShiftRequest], list[Iss
         if r.date in inp.leave_of(r.nurse_id):
             issues.append(Issue(level, "request_on_leave",
                                 f"{nurse.name}: {label} falls on her Co day - {must}.", r.nurse_id, r.date))
+            continue
+        if r.date in blocked[r.nurse_id]:
+            # Dropped like a request on a Co day: she is away across this
+            # weekend, so the model has no variable to grant it with. Dropping it
+            # here keeps the solver and the validator agreeing - otherwise a hard
+            # request would be silently ignored by one and flagged by the other.
+            issues.append(Issue(level, "request_on_leave_bridge",
+                                f"{nurse.name}: {label} falls on a weekend she is away across "
+                                f"(Co either side) - {must}.", r.nurse_id, r.date))
             continue
         if r.kind == "K" and not nurse.kitchen_capable:
             issues.append(Issue(level, "request_kitchen",

@@ -13,6 +13,7 @@ export default function Legend({ staffType }: { staffType?: StaffType }) {
         { cls: "c-k", code: "8", label: t("legend.eight") },
         { cls: "c-t", code: "4/8", label: t("legend.t") },
         { cls: "c-co", code: "Co", label: t("legend.co") },
+        { cls: "c-blocked", code: "", label: t("legend.blocked") },
       ]
     : [
         { cls: "c-z", code: "Z", label: t("legend.z") },
@@ -21,6 +22,7 @@ export default function Legend({ staffType }: { staffType?: StaffType }) {
         { cls: "c-h", code: "8", label: t("legend.h") },
         { cls: "c-t", code: "4/8", label: t("legend.t") },
         { cls: "c-co", code: "Co", label: t("legend.co") },
+        { cls: "c-blocked", code: "", label: t("legend.blocked") },
       ];
   return (
     <div className="legend">

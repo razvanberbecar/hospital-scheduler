@@ -84,6 +84,41 @@ def working_days(year: int, month: int, holidays: set[dt.date]) -> int:
     return sum(1 for d in month_dates(year, month) if not is_offday(d, holidays))
 
 
+def bridged_offdays(year: int, month: int, holidays: set[dt.date],
+                    leave: set[dt.date]) -> set[dt.date]:
+    """Off days the nurse's own leave brackets on both sides, so she is away
+    across them and cannot be worked.
+
+    Co is a Monday-Friday thing, so a nurse on leave on the working day before a
+    weekend and again on the working day after it is on vacation through the
+    weekend. Those days are blocked but earn nothing: weekends are not working
+    days, so they carry no 8h credit and do not count as leave days.
+
+    Generalised over runs of consecutive off days rather than Saturday/Sunday, so
+    a public holiday cannot break a bridge: with Friday a holiday the run is
+    Fri-Sun and the flanking working days are Thursday and Monday.
+
+    A run touching the month edge is never bridged - its flanking working day
+    lies in the neighbouring month, whose leave this schedule does not know.
+    """
+    dates = month_dates(year, month)
+    blocked: set[dt.date] = set()
+    i = 0
+    while i < len(dates):
+        if not is_offday(dates[i], holidays):
+            i += 1
+            continue
+        j = i
+        while j < len(dates) and is_offday(dates[j], holidays):
+            j += 1
+        # dates[i:j] is a maximal off-day run, so dates[i-1] and dates[j] - when
+        # they exist - are by construction the flanking working days.
+        if i > 0 and j < len(dates) and dates[i - 1] in leave and dates[j] in leave:
+            blocked |= set(dates[i:j])
+        i = j
+    return blocked
+
+
 def night_split(start: dt.date, holidays: set[dt.date]) -> tuple[int, int]:
     """(normal, weekend/holiday) hours of the 12h night starting 19:00 on `start`."""
     nxt = start + ONE_DAY

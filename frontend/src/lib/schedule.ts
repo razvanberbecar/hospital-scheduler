@@ -14,10 +14,10 @@ import type {
 /** What a single grid cell shows and how it is coloured. */
 export interface CellView {
   text: string;
-  cls: string; // "" | "c-z" | "c-n" | "c-k" | "c-h" | "c-t" | "c-co"
+  cls: string; // "" | "c-z" | "c-n" | "c-k" | "c-h" | "c-t" | "c-co" | "c-blocked"
   locked: boolean;
-  editable: boolean; // false only for Co; blank cells accept a new shift
-  reason: "assignment" | "co" | "empty";
+  editable: boolean; // every cell is editable, Co included
+  reason: "assignment" | "co" | "blocked" | "empty";
   shift: AssignmentShift | null;
   duration: number | null;
 }
@@ -34,12 +34,14 @@ const EMPTY_CELL: CellView = {
 
 /**
  * Resolve the display for one nurse/day.
- * Priority: an assignment wins; else a days_off entry renders "Co"; else blank.
+ * Priority: an assignment wins; else a days_off entry renders "Co"; else a
+ * Co-bridged off day renders blank-but-greyed; else blank.
  * Text: Z->"Z", N->"N", K->"8", H->"8", T->its duration ("4"/"8"), Co->"Co".
  */
 export function cellView(
   assignment: AssignmentOut | SnapshotAssignment | undefined,
   isDayOff: boolean,
+  isBlocked = false,
 ): CellView {
   if (assignment) {
     const shift = assignment.shift;
@@ -86,7 +88,12 @@ export function cellView(
     };
   }
   if (isDayOff) {
-    return { ...EMPTY_CELL, text: "Co", cls: "c-co", reason: "co", editable: false };
+    return { ...EMPTY_CELL, text: "Co", cls: "c-co", reason: "co" };
+  }
+  if (isBlocked) {
+    // Co either side of this weekend: she is away across it. Not a Co day (no
+    // credit), so it stays blank - the grey just explains the emptiness.
+    return { ...EMPTY_CELL, cls: "c-blocked", reason: "blocked" };
   }
   return EMPTY_CELL;
 }

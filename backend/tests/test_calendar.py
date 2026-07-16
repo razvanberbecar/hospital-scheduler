@@ -51,6 +51,48 @@ def test_month_boundary_night_counts_fully_in_start_month():
     assert normal + weekend == 12  # nothing spills into August
 
 
+def test_bridged_offdays_blocks_a_weekend_between_two_co_days():
+    """Co on Friday and again on Monday: she is away across the weekend."""
+    hs = cal.default_holidays(2026, 7)
+    # July 2026: 3rd Fri, 4th-5th weekend, 6th Mon.
+    assert cal.bridged_offdays(2026, 7, hs, {d(2026, 7, 3), d(2026, 7, 6)}) == {
+        d(2026, 7, 4), d(2026, 7, 5)}
+
+
+def test_bridged_offdays_needs_co_on_both_sides():
+    hs = cal.default_holidays(2026, 7)
+    assert cal.bridged_offdays(2026, 7, hs, {d(2026, 7, 3)}) == set()   # Friday only
+    assert cal.bridged_offdays(2026, 7, hs, {d(2026, 7, 6)}) == set()   # Monday only
+    assert cal.bridged_offdays(2026, 7, hs, set()) == set()
+
+
+def test_bridged_offdays_spans_a_holiday_flanked_weekend():
+    """The flanking days are the WORKING days either side, so a public holiday
+    cannot break a bridge: Christmas 2026 falls on Friday, making Dec 25-27 one
+    off-day run between Thursday the 24th and Monday the 28th."""
+    hs = cal.default_holidays(2026, 12)
+    assert cal.bridged_offdays(2026, 12, hs, {d(2026, 12, 24), d(2026, 12, 28)}) == {
+        d(2026, 12, 25), d(2026, 12, 26), d(2026, 12, 27)}
+    # Co on the holiday itself is not Co on a working day -> no bridge.
+    assert cal.bridged_offdays(2026, 12, hs, {d(2026, 12, 25), d(2026, 12, 28)}) == set()
+
+
+def test_bridged_offdays_ignores_runs_at_the_month_edge():
+    """A run touching the edge has a flanking day in the neighbouring month,
+    whose leave this schedule does not know - never bridged."""
+    hs = cal.default_holidays(2026, 8)
+    # August 2026 starts Sat 1st / Sun 2nd: no working day before the run.
+    assert d(2026, 8, 1).weekday() == 5
+    assert cal.bridged_offdays(2026, 8, hs, {d(2026, 8, 3), d(2026, 8, 31)}) == set()
+
+
+def test_bridged_offdays_handles_several_bridges_in_one_month():
+    hs = cal.default_holidays(2026, 7)
+    leave = {d(2026, 7, 3), d(2026, 7, 6), d(2026, 7, 10), d(2026, 7, 13)}
+    assert cal.bridged_offdays(2026, 7, hs, leave) == {
+        d(2026, 7, 4), d(2026, 7, 5), d(2026, 7, 11), d(2026, 7, 12)}
+
+
 def test_bucket_for_simple_shifts():
     hs = cal.default_holidays(2026, 7)
     assert cal.shift_hours(d(2026, 7, 6), Shift.DAY, 12, hs) == (12, 0)     # Monday

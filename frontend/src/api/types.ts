@@ -9,7 +9,9 @@ export type StaffType = "asistenta" | "infirmiera";
 export type ScheduleStatus = "draft" | "approved" | "locked";
 export type RequestKind = "Z" | "N" | "K" | "FREE";
 // H is head-only; "8" is infirmiere-only (the 8h daytime shift).
-export type EditShift = "Z" | "N" | "K" | "T" | "H" | "8";
+// "Co" is not a shift: it upserts a leave day rather than an assignment, but the
+// grid edits it through the same cell editor as any shift.
+export type EditShift = "Z" | "N" | "K" | "T" | "H" | "8" | "Co";
 // The shift codes that can appear in an assignment row (H is auto-managed).
 export type AssignmentShift = "Z" | "N" | "K" | "H" | "T" | "8";
 
@@ -145,6 +147,10 @@ export interface SetupOut {
   target_hours: number;
   roster: RosterEntryOut[]; // in the manager's display order (users.position)
   days_off: DayOffIn[];
+  // Derived server-side: off days a nurse's own Co brackets on both sides. She
+  // is away across them and cannot be worked, but they are not Co and earn no
+  // credit. Shown greyed so an empty weekend explains itself.
+  blocked_days: DayOffIn[];
   requests: RequestOut[];
   prev_tail: Record<string, Record<string, string>>;
   config: Record<string, unknown>;

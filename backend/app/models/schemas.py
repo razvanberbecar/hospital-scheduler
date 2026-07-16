@@ -111,7 +111,9 @@ class HolidaysPut(BaseModel):
 
 # --- schedules (M3) --------------------------------------------------------
 RequestKind = Literal["Z", "N", "K", "FREE"]  # K rejected on infirmiere schedules
-EditShift = Literal["Z", "N", "K", "T", "H", "8"]  # H head-only; "8" infirmiere-only
+# H head-only; "8" infirmiere-only. "Co" is not a shift: it upserts a leave day
+# (days_off) rather than an assignment, so the grid can edit Co like any cell.
+EditShift = Literal["Z", "N", "K", "T", "H", "8", "Co"]
 ScheduleStatus = Literal["draft", "approved", "locked"]
 
 
@@ -198,6 +200,10 @@ class SetupOut(BaseModel):
     target_hours: int
     roster: list[RosterEntryOut]
     days_off: list[DayOffIn]
+    # Derived, never stored: off days a nurse's own Co brackets on both sides.
+    # She is away across them, so they cannot be worked - but they are not Co and
+    # earn no credit. Sent so the grid can show why they are empty.
+    blocked_days: list[DayOffIn]
     requests: list[RequestOut]
     prev_tail: dict[int, dict[dt.date, str]]
     config: dict

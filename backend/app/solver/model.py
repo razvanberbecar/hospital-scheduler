@@ -93,8 +93,11 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
     t8: dict[tuple[int, int], cp_model.IntVar] = {}
 
     for n in workers:
+        # A nurse on leave either side of a weekend is away across it, so those
+        # off days get no variables either - same treatment as Co itself.
+        unavailable = inp.unavailable_of(n.id, holidays)
         for di, day in enumerate(dates):
-            if day in inp.leave_of(n.id):
+            if day in unavailable:
                 continue
             x[n.id, di, Shift.DAY] = m.NewBoolVar(f"Z_{n.id}_{di}")
             x[n.id, di, Shift.NIGHT] = m.NewBoolVar(f"N_{n.id}_{di}")
@@ -461,8 +464,9 @@ def _diagnose(inp: ScheduleInput, holidays: set[dt.date],
     m = cp_model.CpModel()
     x = {}
     for n in workers:
+        unavailable = inp.unavailable_of(n.id, holidays)
         for di, day in enumerate(dates):
-            if day in inp.leave_of(n.id):
+            if day in unavailable:
                 continue
             x[n.id, di, Shift.DAY] = m.NewBoolVar(f"Z_{n.id}_{di}")
             x[n.id, di, Shift.NIGHT] = m.NewBoolVar(f"N_{n.id}_{di}")

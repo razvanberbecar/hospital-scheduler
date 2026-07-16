@@ -89,6 +89,10 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
     V = report.violations.append
     W = report.warnings.append
 
+    # Off days each nurse's own Co brackets on both sides: unworkable, and unlike
+    # Co they earn no credit, so they never touch the totals below.
+    blocked_by_nurse = {n.id: inp.blocked_of(n.id, holidays) for n in inp.nurses}
+
     by_nurse_day: dict[tuple[int, dt.date], list[Assignment]] = defaultdict(list)
     by_day_shift: dict[tuple[dt.date, Shift], list[Assignment]] = defaultdict(list)
     for a in assignments:
@@ -110,6 +114,11 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
             V(Issue("violation", "leave_conflict",
                     f"{nurse.name}: assigned {a.shift.value} on {a.date} but that is a Co (leave) day.",
                     nurse_id=a.nurse_id, date=a.date))
+        elif a.date in blocked_by_nurse[a.nurse_id]:
+            V(Issue("violation", "leave_bridge",
+                    f"{nurse.name}: assigned {a.shift.value} on {a.date} but she is on Co on the "
+                    f"working day either side of it - she is away across this weekend and cannot "
+                    f"be scheduled.", nurse_id=a.nurse_id, date=a.date))
         expected = cal.duration_of(a.shift, a.duration if a.shift is Shift.TOPUP else 0)
         if a.shift is Shift.TOPUP:
             if a.duration not in TOPUP_DURATIONS:

@@ -80,7 +80,7 @@
   },
   "grid": {
     "nurse": "Asistentă",
-    "coInSetup": "Zilele de Co se modifică în Setări"
+    "coBridge": "Are concediu (Co) și înainte, și după acest weekend - este plecată, nu poate fi programată"
   },
   "totals": {
     "total": "Total",
@@ -115,7 +115,8 @@
     "eight": "8 — tură de zi 8h",
     "t": "4/8 — completare (top-up)",
     "co": "Co — zi de concediu",
-    "locked": "celulă blocată"
+    "locked": "celulă blocată",
+    "blocked": "plecată peste weekendul de concediu"
   },
   "detail": {
     "month": "Luna",
@@ -173,7 +174,9 @@
     "head": "șefă",
     "eight": "tură 8h",
     "clear": "Șterge",
-    "locked": "celulă blocată"
+    "locked": "celulă blocată",
+    "co": "Co",
+    "coWorkdaysOnly": "Concediul (Co) se poate pune doar în zilele lucrătoare, luni-vineri"
   },
   "setup": {
     "title": "Setări grafic",

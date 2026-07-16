@@ -53,11 +53,33 @@ def test_heavy_leave_relaxes_night_minimum_with_warning():
     assert "nights_relaxed" in codes(run_prechecks(inp), "warning")
 
 
-def test_twenty_leave_days_still_allows_three_nights():
-    leave = {4: set(WORKDAYS[:20])}  # 24h required; 3 nights = 36h = band edge
-    minimum, relaxed = per_nurse_night_minimum(
-        ScheduleInput(2026, 7, 184, DEMO_NURSES, leave=leave), HOLIDAYS)[4]
+def test_three_nights_survive_the_hours_band_edge():
+    """The hours edge: at 24h required worked, 3 nights (36h) still sit inside
+    the +/-12h band, so the minimum must not relax.
+
+    Reached with 10 Co days against a 104h target rather than 20 against 184h:
+    20 of July's 23 working days cannot avoid bridging a weekend (four weekends
+    need four distinct free flanking days and only three days are left over), so
+    that shape measures day availability instead of the hours it means to guard.
+    """
+    leave = {4: set(WORKDAYS[:10])}  # 104 - 80 = 24h required
+    inp = ScheduleInput(2026, 7, 104, DEMO_NURSES, leave=leave, holidays=HOLIDAYS)
+    assert inp.effective_target(4) - 8 * 10 == 24
+    minimum, relaxed = per_nurse_night_minimum(inp, HOLIDAYS)[4]
     assert (minimum, relaxed) == (3, False)
+
+
+def test_consecutive_leave_relaxes_nights_via_the_bridged_weekends():
+    """Co on every working day of July 1-28 is a month-long holiday: she is also
+    away across the four weekends inside it, leaving only the 29th-31st. Three
+    nights no longer fit on days, so the minimum relaxes and is flagged rather
+    than blocking (decided: flag, don't block)."""
+    leave = {4: set(WORKDAYS[:20])}
+    inp = ScheduleInput(2026, 7, 184, DEMO_NURSES, leave=leave, holidays=HOLIDAYS)
+    assert len(inp.blocked_of(4, HOLIDAYS)) == 8  # four bridged weekends
+    minimum, relaxed = per_nurse_night_minimum(inp, HOLIDAYS)[4]
+    assert relaxed and minimum < 3
+    assert "nights_relaxed" in codes(run_prechecks(inp), "warning")
 
 
 def test_moderate_leave_keeps_three_nights():

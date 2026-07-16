@@ -27,6 +27,7 @@ export interface ScheduleGridProps {
   roster: RosterEntryOut[]; // pre-sorted BIG then SMALL (one pool for infirmiere)
   assignments: GridAssignment[];
   daysOff: DayOffIn[]; // empty for snapshots
+  blockedDays?: DayOffIn[]; // Co-bridged off days; absent for snapshots
   totals: NurseTotalsOut[];
   perDay: DayCoverageOut[]; // empty for snapshots (no coverage rows then)
   holidays: Set<string>;
@@ -52,6 +53,7 @@ export default function ScheduleGrid(props: ScheduleGridProps) {
     roster,
     assignments,
     daysOff,
+    blockedDays,
     totals,
     perDay,
     holidays,
@@ -66,6 +68,8 @@ export default function ScheduleGrid(props: ScheduleGridProps) {
   for (const a of assignments) asgMap.set(`${a.user_id}|${a.date}`, a);
   const offSet = new Set<string>();
   for (const d of daysOff) offSet.add(`${d.user_id}|${d.date}`);
+  const blockedSet = new Set<string>();
+  for (const d of blockedDays ?? []) blockedSet.add(`${d.user_id}|${d.date}`);
   const totalsMap = new Map<number, NurseTotalsOut>();
   for (const tt of totals) totalsMap.set(tt.user_id, tt);
   const coverageMap = new Map<string, DayCoverageOut>();
@@ -155,12 +159,16 @@ export default function ScheduleGrid(props: ScheduleGridProps) {
                   <tr key={n.user_id}>
                     <td className="name-col">{n.full_name}</td>
                     {days.map((d) => {
-                      const cv = cellView(asgMap.get(`${n.user_id}|${d}`), offSet.has(`${n.user_id}|${d}`));
-                      const clickable = Boolean(onCellClick) && cv.editable && cv.reason !== "co";
+                      const cv = cellView(
+                        asgMap.get(`${n.user_id}|${d}`),
+                        offSet.has(`${n.user_id}|${d}`),
+                        blockedSet.has(`${n.user_id}|${d}`),
+                      );
+                      const clickable = Boolean(onCellClick) && cv.editable;
                       const isActive =
                         activeCell && activeCell.userId === n.user_id && activeCell.date === d;
                       let title: string | undefined;
-                      if (onCellClick && cv.reason === "co") title = t("grid.coInSetup");
+                      if (cv.reason === "blocked") title = t("grid.coBridge");
                       return (
                         <td
                           key={d}

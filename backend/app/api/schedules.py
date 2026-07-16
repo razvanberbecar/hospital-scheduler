@@ -314,11 +314,20 @@ def _setup_out(db: Session, schedule: Schedule) -> SetupOut:
     days_off = [DayOffIn(user_id=r.user_id, date=r.date)
                 for r in db.scalars(select(DayOff).where(DayOff.schedule_id == schedule.id)
                                     .order_by(DayOff.user_id, DayOff.date))]
+    # Derived from the same days_off rows the solver reads, so the grid greys the
+    # exact days the model refuses to fill.
+    holidays = _holidays(db, schedule.year, schedule.month)
+    leave = _leave(db, schedule)
+    blocked_days = [
+        DayOffIn(user_id=uid, date=day)
+        for uid in sorted(leave)
+        for day in sorted(cal.bridged_offdays(schedule.year, schedule.month,
+                                              holidays, leave[uid]))]
     requests = [RequestOut(user_id=r.user_id, date=r.date, kind=r.kind, hard=r.hard,
                            granted=r.granted) for r in _requests(db, schedule)]
     return SetupOut(
         target_hours=schedule.target_hours, roster=roster, days_off=days_off,
-        requests=requests,
+        blocked_days=blocked_days, requests=requests,
         prev_tail={nid: {d.isoformat(): s.value for d, s in day_map.items()}
                    for nid, day_map in _prev_tail(schedule).items()},
         config=schedule.config or {})
@@ -535,21 +544,51 @@ def edit_assignments(schedule_id: int, body: AssignmentsPatch, db: Db, manager: 
     """Hand-edit cells while draft (plan 6.7). shift null clears a cell; a shift
     upserts it with calendar-correct hour buckets. Head cells are first-class:
     they may be edited or cleared like any other, and an H shift may be placed
-    only on the rostered head nurse."""
+    only on the rostered head nurse.
+
+    "Co" is editable here like any other cell, but it is leave rather than a
+    shift: it upserts a days_off row, which is what the solver's leave, the 8h
+    credit and the bridged-weekend rule all read. A cell holds either a shift or
+    a Co, never both, so each replaces the other and null clears whichever is
+    there. Co days entered up front in Setup and Co days set here are the same
+    rows - this screen is just a second way in."""
     schedule = _get_schedule(db, schedule_id, manager)
     _require_draft(schedule)
     is_aide = schedule.staff_type == STAFF_AIDE
     holidays = _holidays(db, schedule.year, schedule.month)
-    head_ids = {n.id for n in _roster_nurses(db, schedule) if n.is_head}
+    roster = _roster_nurses(db, schedule)
+    head_ids = {n.id for n in roster if n.is_head}
+    roster_ids = {n.id for n in roster}
     for edit in body.edits:
         if edit.date.year != schedule.year or edit.date.month != schedule.month:
             raise HTTPException(422, f"{edit.date} is outside {schedule.month:02d}/{schedule.year}")
         existing = db.scalar(select(AssignmentRow).where(
             AssignmentRow.schedule_id == schedule.id,
             AssignmentRow.user_id == edit.user_id, AssignmentRow.date == edit.date))
+        day_off = db.scalar(select(DayOff).where(
+            DayOff.schedule_id == schedule.id,
+            DayOff.user_id == edit.user_id, DayOff.date == edit.date))
         if edit.shift is None:
             if existing is not None:
                 db.delete(existing)
+            if day_off is not None:
+                db.delete(day_off)
+            db.flush()
+            continue
+        if edit.shift == "Co":
+            # Co is leave, not an assignment: no Shift enum member, no hour
+            # buckets, no lock (the solver always honours leave, so pinning it
+            # would mean nothing).
+            if edit.user_id not in roster_ids:
+                raise HTTPException(422, "Co can only be given to a nurse on this schedule's roster")
+            if cal.is_offday(edit.date, holidays):
+                raise HTTPException(422, f"Co on {edit.date} is invalid - leave is allowed only on "
+                                         f"Monday-Friday working days")
+            if existing is not None:
+                db.delete(existing)   # Co replaces whatever shift was there
+            if day_off is None:
+                db.add(DayOff(schedule_id=schedule.id, user_id=edit.user_id, date=edit.date))
+            db.flush()
             continue
         shift = Shift(edit.shift)
         # Shift legality per staff type: the 8h shift is infirmiere-only; the
@@ -567,6 +606,8 @@ def edit_assignments(schedule_id: int, body: AssignmentsPatch, db: Db, manager: 
         else:
             duration = cal.duration_of(shift)
         nh, wh = cal.shift_hours(edit.date, shift, duration, holidays)
+        if day_off is not None:
+            db.delete(day_off)        # ...and a shift replaces the Co
         if existing is None:
             existing = AssignmentRow(schedule_id=schedule.id, user_id=edit.user_id, date=edit.date)
             db.add(existing)
@@ -575,6 +616,7 @@ def edit_assignments(schedule_id: int, body: AssignmentsPatch, db: Db, manager: 
         existing.normal_hours = nh
         existing.weekend_hours = wh
         existing.locked = edit.locked
+        db.flush()
     db.commit()
     db.refresh(schedule)
     report = _validate_current(db, schedule)

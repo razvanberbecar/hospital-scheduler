@@ -24,7 +24,7 @@ import type {
 } from "../api/types";
 import type { ApproveViolationsError, PrechecksError, SolverError } from "../api/types";
 import { useUser } from "../context/UserContext";
-import { monthDates, monthYearLabel } from "../lib/dates";
+import { isWeekend, monthDates, monthYearLabel } from "../lib/dates";
 import { nameOf, requestKindLabel } from "../lib/schedule";
 import Legend from "../components/Legend";
 import ScheduleGrid from "../components/ScheduleGrid";
@@ -135,6 +135,7 @@ export default function ScheduleDetail() {
         holidays={holidays}
         canEdit={canEdit}
         onValidate={applyValidate}
+        onReload={load}
         setError={setError}
       />
 
@@ -164,6 +165,7 @@ function ScheduleGridEditable({
   holidays,
   canEdit,
   onValidate,
+  onReload,
   setError,
 }: {
   detail: ScheduleDetailOut;
@@ -172,6 +174,7 @@ function ScheduleGridEditable({
   holidays: Set<string>;
   canEdit: boolean;
   onValidate: (v: ValidateOut) => void;
+  onReload: () => Promise<void>;
   setError: (s: string) => void;
 }) {
   const { t } = useTranslation();
@@ -189,6 +192,12 @@ function ScheduleGridEditable({
   const activeIsHead = active
     ? detail.setup.roster.find((r) => r.user_id === active.userId)?.role === "manager_nurse"
     : false;
+  const activeIsCo = active
+    ? detail.setup.days_off.some((d) => d.user_id === active.userId && d.date === active.date)
+    : false;
+  // Co may only be placed on a working day, so don't offer it on a weekend or
+  // public holiday - the API refuses those anyway (422).
+  const activeIsOffday = active ? holidays.has(active.date) || isWeekend(active.date) : false;
 
   // keepOpen: the lock-checkbox path re-saves the same cell but leaves the
   // editor open, so the manager can keep working on it.
@@ -213,6 +222,14 @@ function ScheduleGridEditable({
           },
         ],
       });
+      // Adding or removing a Co ripples well past this cell: leave credit moves
+      // every total, and it can bridge or un-bridge a whole weekend. Refetch
+      // instead of merging locally, so the grid matches the server exactly.
+      if (shift === "Co" || activeIsCo) {
+        await onReload();
+        if (!keepOpen) setActive(null);
+        return;
+      }
       // Update the cell locally (clear vs upsert).
       setAssignments((prev) => {
         const rest = prev.filter((a) => !(a.user_id === active.userId && a.date === active.date));
@@ -251,6 +268,7 @@ function ScheduleGridEditable({
         roster={detail.setup.roster}
         assignments={assignments}
         daysOff={detail.setup.days_off}
+        blockedDays={detail.setup.blocked_days}
         totals={detail.totals}
         perDay={detail.per_day}
         holidays={holidays}
@@ -265,6 +283,8 @@ function ScheduleGridEditable({
           current={activeAssignment}
           isHead={activeIsHead}
           isAide={detail.staff_type === "infirmiera"}
+          isCo={activeIsCo}
+          isOffday={activeIsOffday}
           saving={saving}
           onSave={saveEdit}
           onClose={() => setActive(null)}
@@ -281,6 +301,8 @@ function CellEditor({
   current,
   isHead,
   isAide,
+  isCo,
+  isOffday,
   saving,
   onSave,
   onClose,
@@ -290,6 +312,8 @@ function CellEditor({
   current: AssignmentOut | undefined;
   isHead: boolean;
   isAide: boolean;
+  isCo: boolean;
+  isOffday: boolean;
   saving: boolean;
   onSave: (
     shift: EditShift | null,
@@ -354,6 +378,16 @@ function CellEditor({
         <button type="button" className="chip" disabled={saving} onClick={() => onSave("T", 8, locked)}>
           8h
         </button>
+        {/* Leave, not a shift - only ever offered on a working day. */}
+        <button
+          type="button"
+          className={`chip ${isCo ? "chip-on" : ""}`}
+          disabled={saving || isOffday || isCo}
+          title={isOffday ? t("editor.coWorkdaysOnly") : undefined}
+          onClick={() => onSave("Co", undefined, false)}
+        >
+          Co
+        </button>
         <button
           type="button"
           className="chip danger"
@@ -363,15 +397,18 @@ function CellEditor({
           {t("editor.clear")}
         </button>
       </div>
-      <label className="checkbox-line">
-        <input
-          type="checkbox"
-          checked={locked}
-          disabled={saving}
-          onChange={(e) => onToggleLock(e.target.checked)}
-        />
-        {t("editor.locked")}
-      </label>
+      {/* A Co needs no lock: the solver never schedules over leave anyway. */}
+      {!isCo && (
+        <label className="checkbox-line">
+          <input
+            type="checkbox"
+            checked={locked}
+            disabled={saving}
+            onChange={(e) => onToggleLock(e.target.checked)}
+          />
+          {t("editor.locked")}
+        </label>
+      )}
       {saving && <p className="hint">{t("common.saving")}</p>}
     </div>
   );
