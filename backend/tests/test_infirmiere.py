@@ -114,23 +114,66 @@ def test_infirmiere_determinism_same_seed():
 # --- validator acceptance / rejection --------------------------------------
 
 def _day_assignments(day, *, z=0, n=0, e=0, base_id=1):
-    """Build a day's worth of infirmiere assignments with z day, n night, e 8h."""
+    """Build a day's worth of infirmiere assignments with z day, n night, e 8h.
+
+    STAFF_AIDE matters only for the night, whose 18:00-06:00 splits 6h/6h rather
+    than the asistente 5h/7h - invisible on a midweek day, wrong the moment the
+    night straddles a weekend.
+    """
     out = []
     nid = base_id
     for _ in range(z):
-        out.append(Assignment(nid, day, Shift.DAY, 12, *cal.shift_hours(day, Shift.DAY, 12, JULY_HOLIDAYS)))
+        out.append(Assignment(nid, day, Shift.DAY, 12,
+                              *cal.shift_hours(day, Shift.DAY, 12, JULY_HOLIDAYS, STAFF_AIDE)))
         nid += 1
     for _ in range(n):
-        out.append(Assignment(nid, day, Shift.NIGHT, 12, *cal.shift_hours(day, Shift.NIGHT, 12, JULY_HOLIDAYS)))
+        out.append(Assignment(nid, day, Shift.NIGHT, 12,
+                              *cal.shift_hours(day, Shift.NIGHT, 12, JULY_HOLIDAYS, STAFF_AIDE)))
         nid += 1
     for _ in range(e):
-        out.append(Assignment(nid, day, Shift.EIGHT, 8, *cal.shift_hours(day, Shift.EIGHT, 8, JULY_HOLIDAYS)))
+        out.append(Assignment(nid, day, Shift.EIGHT, 8,
+                              *cal.shift_hours(day, Shift.EIGHT, 8, JULY_HOLIDAYS, STAFF_AIDE)))
         nid += 1
     return out
 
 
 def _codes(issues):
     return {i.code for i in issues}
+
+
+# --- the 06:00 clock (infirmiere work 06-18 / 18-06) -----------------------
+
+def test_infirmiera_night_into_saturday_is_banked_six_six():
+    """Their 18:00-06:00 night lays 6h on Friday and 6h on Saturday; an
+    asistenta's 19:00-07:00 would be 5h/7h. Friday July 3 2026."""
+    fri = dt.date(2026, 7, 3)
+    assert cal.shift_hours(fri, Shift.NIGHT, 12, JULY_HOLIDAYS, STAFF_AIDE) == (6, 6)
+
+
+def test_validator_rejects_an_asistenta_split_on_an_infirmiere_night():
+    """A night stored 5/7 on an infirmiere schedule is the asistente clock and
+    must be caught - the same guard that keeps hand-edits honest."""
+    fri = dt.date(2026, 7, 3)
+    inp = aide_input()
+    wrong = [Assignment(1, fri, Shift.NIGHT, 12, 5, 7)]   # asistenta split
+    assert "bad_bucket_split" in _codes(validate(inp, wrong).violations)
+    right = [Assignment(1, fri, Shift.NIGHT, 12, 6, 6)]   # infirmiera split
+    assert "bad_bucket_split" not in _codes(validate(inp, right).violations)
+
+
+def test_solver_banks_infirmiere_nights_on_the_six_six_clock():
+    """End to end: every night the solver emits for infirmiere is bucketed on
+    their own clock, and the validator - which re-derives it - agrees."""
+    inp = aide_input(config=Config(seed=7, max_time_s=30.0, workers=8))
+    res = solve(inp)
+    assert res.ok, (res.status, res.diagnosis)
+    nights = [a for a in res.assignments if a.shift is Shift.NIGHT]
+    assert nights
+    for a in nights:
+        assert (a.normal_hours, a.weekend_hours) == \
+            cal.shift_hours(a.date, Shift.NIGHT, 12, JULY_HOLIDAYS, STAFF_AIDE)
+        assert {a.normal_hours, a.weekend_hours} != {5, 7}  # never the nurse clock
+    assert validate(inp, res.assignments).ok
 
 
 def test_validator_accepts_two_z_one_n_swap():

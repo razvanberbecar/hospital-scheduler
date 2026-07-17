@@ -96,11 +96,15 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
         # A nurse on leave either side of a weekend is away across it, so those
         # off days get no variables either - same treatment as Co itself.
         unavailable = inp.unavailable_of(n.id, holidays)
+        # The eve of a Co day takes no NIGHT var (a night would run 7h into her
+        # leave); the day still takes the others, which end before midnight.
+        no_night = inp.night_blocked_of(n.id)
         for di, day in enumerate(dates):
             if day in unavailable:
                 continue
             x[n.id, di, Shift.DAY] = m.NewBoolVar(f"Z_{n.id}_{di}")
-            x[n.id, di, Shift.NIGHT] = m.NewBoolVar(f"N_{n.id}_{di}")
+            if day not in no_night:
+                x[n.id, di, Shift.NIGHT] = m.NewBoolVar(f"N_{n.id}_{di}")
             if is_aide:
                 # the 8h slot exists on every calendar day (weekends/holidays too)
                 x[n.id, di, Shift.EIGHT] = m.NewBoolVar(f"E_{n.id}_{di}")
@@ -293,7 +297,7 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
                 v = x.get((n.id, di, s))
                 if v is None:
                     continue
-                nh, wh = cal.shift_hours(day, s, cal.duration_of(s), holidays)
+                nh, wh = cal.shift_hours(day, s, cal.duration_of(s), holidays, inp.staff_type)
                 if nh:
                     n_terms.append(nh * v)
                 if wh:
@@ -398,7 +402,7 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
                 v = x.get((n.id, di, s))
                 if v is not None and solver.Value(v):
                     dur = cal.duration_of(s)
-                    nh, wh = cal.shift_hours(day, s, dur, holidays)
+                    nh, wh = cal.shift_hours(day, s, dur, holidays, inp.staff_type)
                     assignments.append(Assignment(n.id, day, s, dur, nh, wh))
             for tv, dur in ((t4.get((n.id, di)), 4), (t8.get((n.id, di)), 8)):
                 if tv is not None and solver.Value(tv):
@@ -465,11 +469,13 @@ def _diagnose(inp: ScheduleInput, holidays: set[dt.date],
     x = {}
     for n in workers:
         unavailable = inp.unavailable_of(n.id, holidays)
+        no_night = inp.night_blocked_of(n.id)
         for di, day in enumerate(dates):
             if day in unavailable:
                 continue
             x[n.id, di, Shift.DAY] = m.NewBoolVar(f"Z_{n.id}_{di}")
-            x[n.id, di, Shift.NIGHT] = m.NewBoolVar(f"N_{n.id}_{di}")
+            if day not in no_night:
+                x[n.id, di, Shift.NIGHT] = m.NewBoolVar(f"N_{n.id}_{di}")
             if is_aide:
                 x[n.id, di, Shift.EIGHT] = m.NewBoolVar(f"E_{n.id}_{di}")
             elif n.kitchen_capable:

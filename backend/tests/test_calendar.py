@@ -1,7 +1,7 @@
 import datetime as dt
 
 from app.solver import calendar as cal
-from app.solver.domain import Shift
+from app.solver.domain import STAFF_AIDE, STAFF_NURSE, Shift
 
 
 def d(y, m, day):
@@ -35,6 +35,44 @@ def test_night_splits():
     assert cal.night_split(d(2026, 7, 3), hs) == (5, 7)    # Fri -> Sat
     assert cal.night_split(d(2026, 7, 4), hs) == (0, 12)   # Sat -> Sun
     assert cal.night_split(d(2026, 7, 5), hs) == (7, 5)    # Sun -> Mon (normal 7 in the morning)
+
+
+def test_infirmiere_night_splits_six_six():
+    """Infirmiere work 18:00-06:00, so their night lays 6h on the start day and
+    6h on the next - against the asistente 19:00-07:00 which gives 5h/7h."""
+    hs = cal.default_holidays(2026, 7)
+    assert cal.night_split(d(2026, 7, 3), hs, STAFF_AIDE) == (6, 6)   # Fri -> Sat
+    assert cal.night_split(d(2026, 7, 5), hs, STAFF_AIDE) == (6, 6)   # Sun -> Mon
+    assert cal.night_split(d(2026, 7, 4), hs, STAFF_AIDE) == (0, 12)  # Sat -> Sun, all weekend
+    assert cal.night_split(d(2026, 7, 7), hs, STAFF_AIDE) == (12, 0)  # Tue -> Wed, all normal
+
+
+def test_staff_types_differ_only_when_a_night_straddles_a_weekend():
+    """A midweek night is 12/0 for everyone; the 5/7-vs-6/6 difference only
+    surfaces when the two calendar days fall in different buckets."""
+    hs = cal.default_holidays(2026, 7)
+    midweek, into_saturday = d(2026, 7, 7), d(2026, 7, 3)
+    assert cal.night_split(midweek, hs) == cal.night_split(midweek, hs, STAFF_AIDE)
+    assert cal.night_split(into_saturday, hs) != cal.night_split(into_saturday, hs, STAFF_AIDE)
+
+
+def test_night_split_defaults_to_the_asistenta_clock():
+    """The default must stay the nurse split so nurse behaviour is untouched."""
+    hs = cal.default_holidays(2026, 7)
+    assert cal.night_split(d(2026, 7, 3), hs) == cal.night_split(d(2026, 7, 3), hs, STAFF_NURSE)
+    assert cal.shift_hours(d(2026, 7, 3), Shift.NIGHT, 12, hs) == (5, 7)
+
+
+def test_only_the_night_reads_staff_type():
+    """Every other shift sits inside one calendar day, so its clock times never
+    reach the arithmetic - an infirmiera 8h (06:00-14:00) buckets like any 8h."""
+    hs = cal.default_holidays(2026, 7)
+    sat, mon = d(2026, 7, 4), d(2026, 7, 6)
+    for shift, dur in ((Shift.DAY, 12), (Shift.EIGHT, 8), (Shift.TOPUP, 4)):
+        assert (cal.shift_hours(mon, shift, dur, hs, STAFF_AIDE)
+                == cal.shift_hours(mon, shift, dur, hs, STAFF_NURSE) == (dur, 0))
+        assert (cal.shift_hours(sat, shift, dur, hs, STAFF_AIDE)
+                == cal.shift_hours(sat, shift, dur, hs, STAFF_NURSE) == (0, dur))
 
 
 def test_night_split_holiday_adjacent():

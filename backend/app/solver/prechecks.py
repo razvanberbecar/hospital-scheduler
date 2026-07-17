@@ -36,10 +36,14 @@ def max_nights_fitting(inp: ScheduleInput, nurse: Nurse, holidays: set[dt.date])
     A night on day d forbids any work on d+1 and d+2, so nights pack greedily
     (earliest-free placement is optimal for this interval structure). Only
     day-availability is considered here; the hours cap is applied separately.
+
+    The eve of a Co day counts as unavailable too: this function places nights
+    only, and a night there would run into her leave.
     """
     dates = cal.month_dates(inp.year, inp.month)
     unavailable = (inp.unavailable_of(nurse.id, holidays)
-                   | _blocked_first_days(inp, nurse.id))
+                   | _blocked_first_days(inp, nurse.id)
+                   | inp.night_blocked_of(nurse.id))
     count = 0
     i = 0
     while i < len(dates):
@@ -371,6 +375,7 @@ def effective_requests(inp: ScheduleInput) -> tuple[list[ShiftRequest], list[Iss
         else cal.default_holidays(inp.year, inp.month)
     by_id = {n.id: n for n in inp.nurses}
     blocked = {n.id: inp.blocked_of(n.id, holidays) for n in inp.nurses}
+    no_night = {n.id: inp.night_blocked_of(n.id) for n in inp.nurses}
     kept: list[ShiftRequest] = []
     seen: dict[tuple[int, dt.date], str] = {}
     for r in inp.requests:
@@ -407,6 +412,14 @@ def effective_requests(inp: ScheduleInput) -> tuple[list[ShiftRequest], list[Iss
             issues.append(Issue(level, "request_on_leave_bridge",
                                 f"{nurse.name}: {label} falls on a weekend she is away across "
                                 f"(Co either side) - {must}.", r.nurse_id, r.date))
+            continue
+        if r.kind == "N" and r.date in no_night[r.nurse_id]:
+            # Same parity reason as request_on_leave_bridge: the model has no
+            # NIGHT variable here, so leaving the request in would have the
+            # solver ignore it while the validator flags it.
+            issues.append(Issue(level, "request_night_before_leave",
+                                f"{nurse.name}: {label} is the day before her Co day and would "
+                                f"run into it - {must}.", r.nurse_id, r.date))
             continue
         if r.kind == "K" and not nurse.kitchen_capable:
             issues.append(Issue(level, "request_kitchen",

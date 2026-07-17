@@ -605,7 +605,7 @@ def edit_assignments(schedule_id: int, body: AssignmentsPatch, db: Db, manager: 
                 raise HTTPException(422, f"Top-up duration must be 4 or 8, not {duration}")
         else:
             duration = cal.duration_of(shift)
-        nh, wh = cal.shift_hours(edit.date, shift, duration, holidays)
+        nh, wh = cal.shift_hours(edit.date, shift, duration, holidays, schedule.staff_type)
         if day_off is not None:
             db.delete(day_off)        # ...and a shift replaces the Co
         if existing is None:

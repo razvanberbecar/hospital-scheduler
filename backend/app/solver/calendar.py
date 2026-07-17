@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from .domain import FIXED_DURATION, Shift
+from .domain import FIXED_DURATION, NIGHT_SPLIT, STAFF_NURSE, Shift
 
 ONE_DAY = dt.timedelta(days=1)
 
@@ -119,26 +119,38 @@ def bridged_offdays(year: int, month: int, holidays: set[dt.date],
     return blocked
 
 
-def night_split(start: dt.date, holidays: set[dt.date]) -> tuple[int, int]:
-    """(normal, weekend/holiday) hours of the 12h night starting 19:00 on `start`."""
+def night_split(start: dt.date, holidays: set[dt.date],
+                staff_type: str = STAFF_NURSE) -> tuple[int, int]:
+    """(normal, weekend/holiday) hours of the 12h night beginning on `start`.
+
+    The night is the only shift that crosses midnight, so its hours land in two
+    calendar days and the split depends on when it starts: an asistenta's
+    19:00-07:00 gives 5h + 7h, an infirmiera's 18:00-06:00 gives 6h + 6h.
+    """
+    evening, morning = NIGHT_SPLIT[staff_type]
     nxt = start + ONE_DAY
     normal = weekend = 0
     if is_offday(start, holidays):
-        weekend += 5
+        weekend += evening
     else:
-        normal += 5
+        normal += evening
     if is_offday(nxt, holidays):
-        weekend += 7
+        weekend += morning
     else:
-        normal += 7
+        normal += morning
     return normal, weekend
 
 
-def shift_hours(day: dt.date, shift: Shift, duration: int, holidays: set[dt.date]) -> tuple[int, int]:
+def shift_hours(day: dt.date, shift: Shift, duration: int, holidays: set[dt.date],
+                staff_type: str = STAFF_NURSE) -> tuple[int, int]:
     """(normal, weekend/holiday) contribution of one assignment. Whole shift is
-    accounted in the month of `day`, per the amended boundary rule."""
+    accounted in the month of `day`, per the amended boundary rule.
+
+    Only the night reads `staff_type`: every other shift sits inside one calendar
+    day, so its bucket depends on the day alone and never on its clock times.
+    """
     if shift is Shift.NIGHT:
-        return night_split(day, holidays)
+        return night_split(day, holidays, staff_type)
     if is_offday(day, holidays):
         return 0, duration
     return duration, 0

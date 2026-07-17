@@ -2,7 +2,9 @@
 
 Terminology follows the planning document (Hospital_Scheduling_Plan.docx v0.5):
 - sections: Copii Mari (BIG) / Sugari (SMALL)
-- shifts: Z (day 07-19), N (night 19-07), K (kitchen 8h), H (head-nurse 8h), T (top-up 4-8h)
+- shifts: Z (day), N (night), K (kitchen 8h), H (head-nurse 8h), T (top-up 4-8h),
+  8 (infirmiere 8h day slot). Clock times differ by staff type - asistente work
+  07-19/19-07, infirmiere 06-18/18-06 - see NIGHT_SPLIT.
 
 Months no longer carry any hour debt: every month stands alone and each nurse
 simply aims for the schedule's base target. The signed distance to that target
@@ -26,18 +28,35 @@ STAFF_AIDE = "infirmiera"
 
 
 class Shift(str, Enum):
-    DAY = "Z"       # 07:00-19:00, 12h
-    NIGHT = "N"     # 19:00-07:00 next day, 12h, split 5h/7h across the two days
+    # Clock times below are the asistente ones; infirmiere run an hour earlier
+    # (see NIGHT_SPLIT). Only the night's times reach the arithmetic.
+    DAY = "Z"       # 12h: asistente 07:00-19:00, infirmiere 06:00-18:00
+    NIGHT = "N"     # 12h across midnight: asistente 19:00-07:00 (5h/7h),
+                    # infirmiere 18:00-06:00 (6h/6h)
     KITCHEN = "K"   # 8h kitchen slot, exactly one every day, kitchen-capable only
     HEAD = "H"      # 8h head-nurse shift, every working day, head nurse only
-    TOPUP = "T"     # 4h or 8h gap-closing shift, max one per nurse per month
-    EIGHT = "8"     # 8h daytime shift (07:00-15:00), every calendar day, infirmiere only
+    TOPUP = "T"     # 4h or 8h gap-closing shift (infirmiere 4h = 06:00-10:00),
+                    # max one per nurse per month
+    EIGHT = "8"     # 8h daytime shift (infirmiere 06:00-14:00), every calendar day
 
 
 FIXED_DURATION = {Shift.DAY: 12, Shift.NIGHT: 12, Shift.KITCHEN: 8,
                   Shift.HEAD: 8, Shift.EIGHT: 8}
 TOPUP_DURATIONS = (4, 8)
 REQUEST_KINDS = ("Z", "N", "K", "FREE")
+
+# Clock times differ by staff type (decided 2026-07-16):
+#   asistente   Z 07:00-19:00, N 19:00-07:00
+#   infirmiere  Z 06:00-18:00, N 18:00-06:00, 8h slot 06:00-14:00, 4h top-up 06:00-10:00
+# Only the night needs modelling. It is the one shift that crosses midnight, so
+# its 12h fall in two different calendar days, and which side they land on picks
+# their normal/weekend bucket. Every other shift sits inside a single day, so
+# only its duration matters and its clock times never reach the arithmetic.
+NIGHT_SPLIT = {
+    STAFF_NURSE: (5, 7),   # 19:00-24:00 = 5h that day, 00:00-07:00 = 7h the next
+    STAFF_AIDE: (6, 6),    # 18:00-24:00 = 6h that day, 00:00-06:00 = 6h the next
+}
+NIGHT_ENDS_AT = {STAFF_NURSE: "07:00", STAFF_AIDE: "06:00"}
 
 
 @dataclass(frozen=True)
@@ -130,6 +149,22 @@ class ScheduleInput:
         """Every day the nurse cannot be given a shift: her leave plus the off
         days her leave bridges."""
         return self.leave_of(nurse_id) | self.blocked_of(nurse_id, holidays)
+
+    def night_blocked_of(self, nurse_id: int) -> set[dt.date]:
+        """Days this nurse may not work a NIGHT: the day before each Co day.
+
+        A night crosses midnight (asistente 19:00-07:00, infirmiere 18:00-06:00),
+        so it spends its last hours on the following day - see NIGHT_SPLIT. A
+        night the day before a Co day would have her working her own leave day.
+        Only the night is forbidden: a Z, K, 8 or top-up on that day ends before
+        midnight and is fine.
+
+        Within the month only (decided): a Co on the 1st says nothing about the
+        previous month's last day, which is usually locked and uncorrectable.
+        """
+        first = dt.date(self.year, self.month, 1)
+        eve = {d - dt.timedelta(days=1) for d in self.leave_of(nurse_id)}
+        return {d for d in eve if d >= first}
 
 
 @dataclass(frozen=True)

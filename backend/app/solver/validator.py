@@ -16,8 +16,9 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from . import calendar as cal
-from .domain import (BIG, SECTION_LABEL, SMALL, STAFF_AIDE, TOPUP_DURATIONS,
-                     Assignment, Issue, Nurse, ScheduleInput, Shift)
+from .domain import (BIG, NIGHT_ENDS_AT, SECTION_LABEL, SMALL, STAFF_AIDE,
+                     TOPUP_DURATIONS, Assignment, Issue, Nurse, ScheduleInput,
+                     Shift)
 from .prechecks import REQUEST_SHIFT, effective_requests, per_nurse_night_minimum
 
 
@@ -92,6 +93,8 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
     # Off days each nurse's own Co brackets on both sides: unworkable, and unlike
     # Co they earn no credit, so they never touch the totals below.
     blocked_by_nurse = {n.id: inp.blocked_of(n.id, holidays) for n in inp.nurses}
+    # Days whose NIGHT would run 7h into a Co day (the eve of each leave day).
+    no_night_by_nurse = {n.id: inp.night_blocked_of(n.id) for n in inp.nurses}
 
     by_nurse_day: dict[tuple[int, dt.date], list[Assignment]] = defaultdict(list)
     by_day_shift: dict[tuple[dt.date, Shift], list[Assignment]] = defaultdict(list)
@@ -119,6 +122,12 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
                     f"{nurse.name}: assigned {a.shift.value} on {a.date} but she is on Co on the "
                     f"working day either side of it - she is away across this weekend and cannot "
                     f"be scheduled.", nurse_id=a.nurse_id, date=a.date))
+        elif a.shift is Shift.NIGHT and a.date in no_night_by_nurse[a.nurse_id]:
+            V(Issue("violation", "night_before_leave",
+                    f"{nurse.name}: night shift on {a.date} runs until "
+                    f"{NIGHT_ENDS_AT[inp.staff_type]} on {a.date + dt.timedelta(days=1)}, which "
+                    f"is her Co day - the day before a leave day cannot be a night.",
+                    nurse_id=a.nurse_id, date=a.date))
         expected = cal.duration_of(a.shift, a.duration if a.shift is Shift.TOPUP else 0)
         if a.shift is Shift.TOPUP:
             if a.duration not in TOPUP_DURATIONS:
@@ -133,7 +142,7 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
             V(Issue("violation", "bad_duration",
                     f"{nurse.name}: {a.shift.value} on {a.date} recorded with {a.duration}h "
                     f"(expected {expected}h).", nurse_id=a.nurse_id, date=a.date))
-        nh, wh = cal.shift_hours(a.date, a.shift, a.duration, holidays)
+        nh, wh = cal.shift_hours(a.date, a.shift, a.duration, holidays, inp.staff_type)
         if (a.normal_hours, a.weekend_hours) != (nh, wh):
             V(Issue("violation", "bad_bucket_split",
                     f"{nurse.name}: {a.shift.value} on {a.date} stored as {a.normal_hours}/{a.weekend_hours} "
