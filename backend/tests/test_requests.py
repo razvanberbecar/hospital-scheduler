@@ -69,6 +69,43 @@ def test_denied_requests_become_validator_warnings(bundle_result):
     assert sorted(denied) == sorted(warned)
 
 
+def test_hard_eight_request_places_a_request_only_8h_shift_for_an_asistenta():
+    """An 8h shift is request-only for asistente: a must-have 8H request puts an
+    EIGHT shift on that nurse/day (which the solver never places on its own), it
+    counts as 8 worked hours, and the month still validates."""
+    day = d(15)  # a Wednesday working day, nobody on leave
+    inp = july([ShiftRequest(7, day, "8", hard=True)])  # id 7 = Campian, a worker
+    assert not has_errors(run_prechecks(inp))
+    res = solve(inp)
+    assert res.ok, (res.status, res.diagnosis)
+    eights = [a for a in res.assignments if a.shift is Shift.EIGHT]
+    assert eights == [a for a in eights if a.nurse_id == 7 and a.date == day], \
+        "the solver must not place any 8h shift beyond the requested one"
+    assert any(a.nurse_id == 7 and a.date == day and a.duration == 8 for a in eights)
+    granted = {(r.nurse_id, r.date): g for r, g in res.requests}
+    assert granted[7, day] is True
+    report = validate(inp, res.assignments)
+    assert report.ok, [v.message for v in report.violations]
+
+
+def test_soft_eight_request_is_reported_when_denied():
+    """A soft 8H adds hours the nurse would not otherwise work, so when she is
+    already at target the solver may decline it - and a denial is reported, never
+    an error (parity between solver and validator)."""
+    day = d(15)
+    inp = july([ShiftRequest(7, day, "8", hard=False)])
+    assert not has_errors(run_prechecks(inp))
+    res = solve(inp)
+    assert res.ok, (res.status, res.diagnosis)
+    granted = {(r.nurse_id, r.date): g for r, g in res.requests}
+    assert (7, day) in granted  # kept and reported either way
+    report = validate(inp, res.assignments)
+    assert report.ok, [v.message for v in report.violations]
+    if not granted[7, day]:
+        assert any(w.code == "request_denied" and w.nurse_id == 7 and w.date == day
+                   for w in report.warnings)
+
+
 def test_request_on_leave_day_is_ignored_with_warning():
     leave = {5: {d(13)}}
     inp = july([ShiftRequest(5, d(13), "Z")], leave=leave)

@@ -110,7 +110,7 @@ class HolidaysPut(BaseModel):
 
 
 # --- schedules (M3) --------------------------------------------------------
-RequestKind = Literal["Z", "N", "K", "FREE"]  # K rejected on infirmiere schedules
+RequestKind = Literal["Z", "N", "K", "8", "FREE"]  # K rejected on infirmiere; "8" both
 # H head-only; "8" infirmiere-only. "Co" is not a shift: it upserts a leave day
 # (days_off) rather than an assignment, so the grid can edit Co like any cell.
 EditShift = Literal["Z", "N", "K", "T", "H", "8", "Co"]

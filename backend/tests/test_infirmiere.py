@@ -12,7 +12,7 @@ import pytest
 
 from app.solver import calendar as cal
 from app.solver.domain import (STAFF_AIDE, Assignment, Config, Nurse,
-                               ScheduleInput, Shift)
+                               ScheduleInput, Shift, ShiftRequest)
 from app.solver.model import solve
 from app.solver.validator import validate
 
@@ -81,6 +81,21 @@ def test_infirmiere_no_kitchen_or_head_shifts(july_aides):
     assert Shift.KITCHEN not in kinds
     assert Shift.HEAD not in kinds
     assert Shift.EIGHT in kinds
+
+
+def test_hard_eight_request_pins_the_8h_slot_for_an_infirmiera():
+    """For infirmiere the 8h slot already exists daily; a must-have 8H request
+    pins it to the requested nurse that day and the month still validates."""
+    day = dt.date(2026, 7, 15)  # a Wednesday working day
+    inp = aide_input(requests=[ShiftRequest(3, day, "8", hard=True)])
+    res = solve(inp)
+    assert res.ok, (res.status, res.diagnosis, [i.message for i in res.prechecks])
+    assert any(a.nurse_id == 3 and a.date == day and a.shift is Shift.EIGHT
+               for a in res.assignments)
+    granted = {(r.nurse_id, r.date): g for r, g in res.requests}
+    assert granted[3, day] is True
+    report = validate(inp, res.assignments)
+    assert report.ok, [v.message for v in report.violations]
 
 
 def test_infirmiere_swap_used_only_under_pressure():
@@ -208,10 +223,12 @@ def test_validator_rejects_kitchen_and_head_on_infirmiere():
     assert sum(1 for v in report.violations if v.code == "shift_not_allowed") >= 2
 
 
-def test_validator_rejects_eight_shift_on_nurse_schedule():
-    """The 8h shift is infirmiere-only: it is a violation on a nurse schedule."""
+def test_validator_allows_eight_shift_on_nurse_schedule():
+    """The 8h shift is now a legal asistente shift too (the solver only ever
+    places it to honor an explicit 8h request): the validator no longer flags it
+    as not-allowed."""
     from app.solver.cli import DEMO_NURSES
     day = dt.date(2026, 7, 6)
     inp = ScheduleInput(2026, 7, 184, DEMO_NURSES)  # default staff_type = nurse
     report = validate(inp, [Assignment(1, day, Shift.EIGHT, 8, 8, 0)])
-    assert "shift_not_allowed" in _codes(report.violations)
+    assert "shift_not_allowed" not in _codes(report.violations)

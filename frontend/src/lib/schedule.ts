@@ -165,6 +165,8 @@ export function requestKindLabel(kind: string, t: TFunction): string {
       return t("request.kindNight");
     case "K":
       return t("request.kindKitchen");
+    case "8":
+      return t("request.kindEight");
     case "FREE":
       return t("request.kindFree");
     default:

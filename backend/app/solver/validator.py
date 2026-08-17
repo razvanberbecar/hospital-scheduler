@@ -155,10 +155,9 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
                         f"{nurse.name}: {a.shift.value} pe {a.date} nu este permisă pe un grafic de "
                         f"infirmiere (fără bucătărie, fără șefă).", nurse_id=a.nurse_id, date=a.date))
         else:
-            if a.shift is Shift.EIGHT:
-                V(Issue("violation", "shift_not_allowed",
-                        f"{nurse.name}: tura de 8h pe {a.date} este doar pentru graficele de infirmiere.",
-                        nurse_id=a.nurse_id, date=a.date))
+            # The 8h shift (Shift.EIGHT) is a legal asistente shift: the solver
+            # only ever places it to honor an explicit 8h request, but as an
+            # assignment it breaks no rule, so it is not flagged here.
             if a.shift is Shift.HEAD and not nurse.is_head:
                 V(Issue("violation", "head_pattern",
                         f"{nurse.name}: tură de asistentă șefă repartizată unei asistente care nu este șefă pe {a.date}.",

@@ -73,7 +73,16 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
     # Infirmiere (aides) are scheduled separately: no head, no kitchen; the third
     # daily shift is an 8h daytime slot (Shift.EIGHT) instead of the kitchen (K).
     is_aide = inp.staff_type == STAFF_AIDE
-    THIRD = Shift.EIGHT if is_aide else Shift.KITCHEN
+    # Every shift a single worker can personally hold on a day (guarded by
+    # presence in x): kitchen exists only for kitchen-capable asistente; the 8h
+    # slot is every-day for infirmiere and, for asistente, only on cells with an
+    # explicit 8h request (see eight_request_cells).
+    PERSONAL_SHIFTS = (Shift.DAY, Shift.NIGHT, Shift.KITCHEN, Shift.EIGHT)
+    # Asistente get no automatic 8h shifts: a Shift.EIGHT variable is created only
+    # where an 8h shift was requested, so the solver can honor the request but
+    # never fills 8h shifts on its own. Infirmiere have their own 8h slot daily.
+    eight_request_cells = (set() if is_aide
+                           else {(r.nurse_id, r.date) for r in inp.requests if r.kind == "8"})
 
     heads = [] if is_aide else [n for n in inp.nurses if n.is_head]
     head = heads[0] if heads else None
@@ -108,14 +117,18 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
             if is_aide:
                 # the 8h slot exists on every calendar day (weekends/holidays too)
                 x[n.id, di, Shift.EIGHT] = m.NewBoolVar(f"E_{n.id}_{di}")
-            elif n.kitchen_capable:
-                x[n.id, di, Shift.KITCHEN] = m.NewBoolVar(f"K_{n.id}_{di}")
+            else:
+                if n.kitchen_capable:
+                    x[n.id, di, Shift.KITCHEN] = m.NewBoolVar(f"K_{n.id}_{di}")
+                # 8h shift for an asistenta: only where explicitly requested.
+                if (n.id, day) in eight_request_cells:
+                    x[n.id, di, Shift.EIGHT] = m.NewBoolVar(f"E8_{n.id}_{di}")
             if not cal.is_offday(day, holidays):
                 t4[n.id, di] = m.NewBoolVar(f"T4_{n.id}_{di}")
                 t8[n.id, di] = m.NewBoolVar(f"T8_{n.id}_{di}")
 
     def day_vars(nid: int, di: int) -> list[cp_model.IntVar]:
-        out = [x[k] for s in (Shift.DAY, Shift.NIGHT, THIRD) if (k := (nid, di, s)) in x]
+        out = [x[k] for s in PERSONAL_SHIFTS if (k := (nid, di, s)) in x]
         for tv in (t4.get((nid, di)), t8.get((nid, di))):
             if tv is not None:
                 out.append(tv)
@@ -293,7 +306,7 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
     for n in workers:
         n_terms, w_terms = [], []
         for di, day in enumerate(dates):
-            for s in (Shift.DAY, Shift.NIGHT, THIRD):
+            for s in PERSONAL_SHIFTS:
                 v = x.get((n.id, di, s))
                 if v is None:
                     continue
@@ -398,7 +411,7 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
     assignments: list[Assignment] = []
     for n in workers:
         for di, day in enumerate(dates):
-            for s in (Shift.DAY, Shift.NIGHT, THIRD):
+            for s in PERSONAL_SHIFTS:
                 v = x.get((n.id, di, s))
                 if v is not None and solver.Value(v):
                     dur = cal.duration_of(s)

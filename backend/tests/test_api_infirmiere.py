@@ -151,6 +151,25 @@ def test_kitchen_request_rejected_on_infirmiere(client):
     assert client.post("/api/schedules", headers=h, json=payload).status_code == 422
 
 
+def test_eight_request_accepted_on_both_staff_types(client):
+    """The 8h request ("8") is allowed for both infirmiere and asistente (unlike
+    the kitchen request, which stays asistente-only)."""
+    a_ids = _seed_aides(client.app)
+    n_ids = _seed_nurses(client.app)
+    h = auth(login(client, "anca.berbecar"))
+
+    aide_payload = _aide_payload(a_ids, requests=[
+        {"user_id": a_ids["inf.1"], "date": "2026-07-07", "kind": "8", "hard": True}])
+    assert client.post("/api/schedules", headers=h, json=aide_payload).status_code == 201
+
+    nurse_payload = {
+        "year": 2026, "month": 8, "target_hours": 184,
+        "roster": [{"user_id": uid} for uid in n_ids.values()],
+        "days_off": [], "config": FAST, "requests": [
+            {"user_id": n_ids["lung.paula"], "date": "2026-08-05", "kind": "8", "hard": True}]}
+    assert client.post("/api/schedules", headers=h, json=nurse_payload).status_code == 201
+
+
 def test_eight_shift_edit_only_on_infirmiere(client):
     """The 8h shift is infirmiere-only; K/H are rejected on an infirmiere grid."""
     a_ids = _seed_aides(client.app)

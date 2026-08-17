@@ -43,7 +43,9 @@ class Shift(str, Enum):
 FIXED_DURATION = {Shift.DAY: 12, Shift.NIGHT: 12, Shift.KITCHEN: 8,
                   Shift.HEAD: 8, Shift.EIGHT: 8}
 TOPUP_DURATIONS = (4, 8)
-REQUEST_KINDS = ("Z", "N", "K", "FREE")
+# "8" is a request for the 8h day shift: the existing daily slot for infirmiere,
+# and a request-only 8h shift for asistente (the solver never places it unasked).
+REQUEST_KINDS = ("Z", "N", "K", "8", "FREE")
 
 # Clock times differ by staff type (decided 2026-07-16):
 #   asistente   Z 07:00-19:00, N 19:00-07:00

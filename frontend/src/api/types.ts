@@ -7,7 +7,9 @@ export type Role = "nurse" | "manager_nurse";
 export type Section = "BIG" | "SMALL";
 export type StaffType = "asistenta" | "infirmiera";
 export type ScheduleStatus = "draft" | "approved" | "locked";
-export type RequestKind = "Z" | "N" | "K" | "FREE";
+// "8" requests the 8h day shift (the daily slot for infirmiere; a request-only
+// 8h shift for asistente). "K" (kitchen) stays asistente-only.
+export type RequestKind = "Z" | "N" | "K" | "8" | "FREE";
 // H is head-only; "8" is infirmiere-only (the 8h daytime shift).
 // "Co" is not a shift: it upserts a leave day rather than an assignment, but the
 // grid edits it through the same cell editor as any shift.

@@ -172,6 +172,7 @@
     "kindDay": "Day",
     "kindNight": "Night",
     "kindKitchen": "Kitchen",
+    "kindEight": "8h shift",
     "kindFree": "Off",
     "grantedYes": "✓ granted",
     "grantedNo": "✗ denied",

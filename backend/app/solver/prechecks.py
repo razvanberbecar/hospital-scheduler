@@ -13,7 +13,7 @@ from . import calendar as cal
 from .domain import (BIG, REQUEST_KINDS, SECTION_LABEL, SMALL, STAFF_AIDE,
                      Issue, Nurse, ScheduleInput, Shift, ShiftRequest)
 
-REQUEST_SHIFT = {"Z": Shift.DAY, "N": Shift.NIGHT, "K": Shift.KITCHEN}
+REQUEST_SHIFT = {"Z": Shift.DAY, "N": Shift.NIGHT, "K": Shift.KITCHEN, "8": Shift.EIGHT}
 
 
 def _blocked_first_days(inp: ScheduleInput, nurse_id: int) -> set[dt.date]:
@@ -439,7 +439,11 @@ def effective_requests(inp: ScheduleInput) -> tuple[list[ShiftRequest], list[Iss
     # contradictions between must-have requests
     cfg = inp.config
     hards = [r for r in kept if r.hard]
-    cap = {"Z": 2 + cfg.extra_day_cap, "N": 2 + cfg.extra_night_cap, "K": 1}
+    # Daily capacity per requestable shift. The 8h slot is a single daily slot for
+    # infirmiere (at most one), but for asistente it is request-only and per-nurse
+    # independent, so any number can be requested on the same day.
+    cap = {"Z": 2 + cfg.extra_day_cap, "N": 2 + cfg.extra_night_cap, "K": 1,
+           "8": 1 if inp.staff_type == STAFF_AIDE else len(inp.nurses)}
     for (day, kind), count in Counter((r.date, r.kind) for r in hards if r.kind != "FREE").items():
         if count > cap[kind]:
             issues.append(Issue("error", "request_overbooked",

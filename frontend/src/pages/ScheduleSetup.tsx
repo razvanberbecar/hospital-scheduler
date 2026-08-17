@@ -438,6 +438,7 @@ export default function ScheduleSetup() {
                   >
                     <option value="Z">{t("request.kindDay")}</option>
                     <option value="N">{t("request.kindNight")}</option>
+                    <option value="8">{t("request.kindEight")}</option>
                     {!isAide && <option value="K">{t("request.kindKitchen")}</option>}
                     <option value="FREE">{t("request.kindFree")}</option>
                   </select>
