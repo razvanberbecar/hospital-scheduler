@@ -194,19 +194,19 @@ def _prev_tail_from_previous(db: Session, year: int, month: int, staff_type: str
 def _get_schedule(db: Session, schedule_id: int, user: User) -> Schedule:
     schedule = db.get(Schedule, schedule_id)
     if schedule is None:
-        raise HTTPException(404, "No such schedule")
+        raise HTTPException(404, "Grafic inexistent")
     if not user.is_manager and schedule.status == STATUS_DRAFT:
-        raise HTTPException(404, "No such schedule")  # nurses never see drafts
+        raise HTTPException(404, "Grafic inexistent")  # nurses never see drafts
     if not user.is_manager and schedule.staff_type != user.staff_type:
-        raise HTTPException(404, "No such schedule")  # readers see only their own staff type
+        raise HTTPException(404, "Grafic inexistent")  # readers see only their own staff type
     return schedule
 
 
 def _require_draft(schedule: Schedule) -> None:
     if schedule.status == STATUS_LOCKED:
-        raise HTTPException(409, "This month is locked and can no longer be edited")
+        raise HTTPException(409, "Această lună este blocată și nu mai poate fi modificată")
     if schedule.status != STATUS_DRAFT:
-        raise HTTPException(409, "Only draft schedules can be edited; re-open is not this action")
+        raise HTTPException(409, "Doar graficele în ciornă pot fi modificate; redeschiderea nu este această acțiune")
 
 
 # --- setup writers ---------------------------------------------------------
@@ -251,28 +251,28 @@ def _validate_roster(db: Session, roster, staff_type: str) -> dict[int, User]:
     head)."""
     ids = [item.user_id for item in roster]
     if len(set(ids)) != len(ids):
-        raise HTTPException(422, "A user appears more than once on the roster")
+        raise HTTPException(422, "Un utilizator apare de mai multe ori pe grafic")
     users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(ids)))} if ids else {}
     for uid in ids:
         u = users.get(uid)
         if u is None:
-            raise HTTPException(422, f"User id {uid} does not exist")
+            raise HTTPException(422, f"Utilizatorul cu id {uid} nu există")
         if not u.active:
-            raise HTTPException(422, f"User '{u.username}' is deactivated and cannot be rostered")
+            raise HTTPException(422, f"Utilizatorul '{u.username}' este dezactivat și nu poate fi pus pe grafic")
         if u.staff_type != staff_type:
             raise HTTPException(422,
-                f"User '{u.username}' is a {u.staff_type}; this schedule is for {staff_type} only")
+                f"Utilizatorul '{u.username}' este {u.staff_type}; acest grafic este doar pentru {staff_type}")
     if staff_type != STAFF_AIDE:
         heads = [uid for uid in ids if users[uid].is_manager]
         if len(heads) > 1:
-            raise HTTPException(422, "At most one manager_nurse (head nurse) may be on the roster")
+            raise HTTPException(422, "Cel mult o asistentă șefă poate fi pe grafic")
     return users
 
 
 def _reject_bad_requests(requests, staff_type: str) -> None:
     """Kitchen (K) requests make no sense on an infirmiere schedule (no kitchen)."""
     if staff_type == STAFF_AIDE and any(r.kind == "K" for r in requests):
-        raise HTTPException(422, "Kitchen (K) requests are not allowed on an infirmiere schedule")
+        raise HTTPException(422, "Cererile de bucătărie (K) nu sunt permise pe un grafic de infirmiere")
 
 
 # --- report / payload assembly ---------------------------------------------
@@ -375,7 +375,7 @@ def create_schedule(body: ScheduleCreate, db: Db, manager: Manager) -> ScheduleD
     if db.scalar(select(Schedule).where(Schedule.year == body.year, Schedule.month == body.month,
                                         Schedule.staff_type == body.staff_type)):
         raise HTTPException(409,
-            f"A {body.staff_type} schedule for {body.month:02d}/{body.year} already exists")
+            f"Există deja un grafic de {body.staff_type} pentru {body.month:02d}/{body.year}")
     users = _validate_roster(db, body.roster, body.staff_type)
     _reject_bad_requests(body.requests, body.staff_type)
     prev_tail = _prev_tail_from_previous(db, body.year, body.month, body.staff_type)
@@ -425,7 +425,7 @@ def delete_schedule(schedule_id: int, db: Db, manager: Manager) -> Response:
     A reopened draft loses its approval history - deliberate (the UI warns)."""
     schedule = _get_schedule(db, schedule_id, manager)
     if schedule.status != STATUS_DRAFT:
-        raise HTTPException(409, "Only draft schedules can be deleted; approved or locked months are kept")
+        raise HTTPException(409, "Doar graficele în ciornă pot fi șterse; lunile aprobate sau blocate se păstrează")
     for table in (AssignmentRow, DayOff, ShiftRequestRow, ScheduleNurse, Approval):
         db.execute(delete(table).where(table.schedule_id == schedule.id))
     db.delete(schedule)
@@ -561,7 +561,7 @@ def edit_assignments(schedule_id: int, body: AssignmentsPatch, db: Db, manager: 
     roster_ids = {n.id for n in roster}
     for edit in body.edits:
         if edit.date.year != schedule.year or edit.date.month != schedule.month:
-            raise HTTPException(422, f"{edit.date} is outside {schedule.month:02d}/{schedule.year}")
+            raise HTTPException(422, f"{edit.date} este în afara lunii {schedule.month:02d}/{schedule.year}")
         existing = db.scalar(select(AssignmentRow).where(
             AssignmentRow.schedule_id == schedule.id,
             AssignmentRow.user_id == edit.user_id, AssignmentRow.date == edit.date))
@@ -580,10 +580,10 @@ def edit_assignments(schedule_id: int, body: AssignmentsPatch, db: Db, manager: 
             # buckets, no lock (the solver always honours leave, so pinning it
             # would mean nothing).
             if edit.user_id not in roster_ids:
-                raise HTTPException(422, "Co can only be given to a nurse on this schedule's roster")
+                raise HTTPException(422, "Co poate fi atribuit doar unei asistente de pe graficul acesta")
             if cal.is_offday(edit.date, holidays):
-                raise HTTPException(422, f"Co on {edit.date} is invalid - leave is allowed only on "
-                                         f"Monday-Friday working days")
+                raise HTTPException(422, f"Co pe {edit.date} este invalid - concediul se poate pune doar în "
+                                         f"zilele lucrătoare, luni-vineri")
             if existing is not None:
                 db.delete(existing)   # Co replaces whatever shift was there
             if day_off is None:
@@ -594,15 +594,15 @@ def edit_assignments(schedule_id: int, body: AssignmentsPatch, db: Db, manager: 
         # Shift legality per staff type: the 8h shift is infirmiere-only; the
         # kitchen (K) and head (H) shifts are nurse-only.
         if is_aide and shift in (Shift.KITCHEN, Shift.HEAD):
-            raise HTTPException(422, "Kitchen (K) and head (H) shifts are not allowed on an infirmiere schedule")
+            raise HTTPException(422, "Turele de bucătărie (K) și de șefă (H) nu sunt permise pe un grafic de infirmiere")
         if not is_aide and shift is Shift.EIGHT:
-            raise HTTPException(422, "The 8h shift is only for infirmiere schedules")
+            raise HTTPException(422, "Tura de 8h este doar pentru graficele de infirmiere")
         if shift is Shift.HEAD and edit.user_id not in head_ids:
-            raise HTTPException(422, "The 8h head-nurse shift (H) can be placed only on the head nurse")
+            raise HTTPException(422, "Tura de 8h a asistentei șefe (H) poate fi pusă doar pe asistenta șefă")
         if shift is Shift.TOPUP:
             duration = edit.duration_hours if edit.duration_hours is not None else 4
             if duration not in TOPUP_DURATIONS:
-                raise HTTPException(422, f"Top-up duration must be 4 or 8, not {duration}")
+                raise HTTPException(422, f"Durata completării trebuie să fie 4 sau 8, nu {duration}")
         else:
             duration = cal.duration_of(shift)
         nh, wh = cal.shift_hours(edit.date, shift, duration, holidays, schedule.staff_type)
@@ -637,18 +637,18 @@ def approve(schedule_id: int, db: Db, manager: Manager) -> ApprovalOut:
     month is still a draft or absent."""
     schedule = _get_schedule(db, schedule_id, manager)
     if schedule.status == STATUS_LOCKED:
-        raise HTTPException(409, "This month is locked and can no longer be approved")
+        raise HTTPException(409, "Această lună este blocată și nu mai poate fi aprobată")
     if schedule.status == STATUS_APPROVED:
         ny, nm = _next_month(schedule.year, schedule.month)
         nxt = db.scalar(select(Schedule).where(
             Schedule.year == ny, Schedule.month == nm,
             Schedule.staff_type == schedule.staff_type))
         if nxt is not None and nxt.status != STATUS_DRAFT:
-            raise HTTPException(409, "Cannot re-approve: the following month is no longer a draft")
+            raise HTTPException(409, "Nu se poate re-aproba: luna următoare nu mai este ciornă")
 
     report = _validate_current(db, schedule)
     if not report.ok:
-        raise HTTPException(409, {"message": "Schedule has violations and cannot be approved",
+        raise HTTPException(409, {"message": "Graficul are încălcări și nu poate fi aprobat",
                                   "violations": [_issue_out(i).model_dump(mode="json")
                                                  for i in report.violations]})
 
@@ -705,9 +705,9 @@ def reopen(schedule_id: int, db: Db, manager: Manager) -> ScheduleDetailOut:
     is kept - a later approval simply adds the next version."""
     schedule = _get_schedule(db, schedule_id, manager)
     if schedule.status == STATUS_LOCKED:
-        raise HTTPException(409, "This month is locked and can no longer be reopened")
+        raise HTTPException(409, "Această lună este blocată și nu mai poate fi redeschisă")
     if schedule.status != STATUS_APPROVED:
-        raise HTTPException(409, "Only an approved month can be reopened")
+        raise HTTPException(409, "Doar o lună aprobată poate fi redeschisă")
     schedule.status = STATUS_DRAFT
     db.add(schedule)
     db.commit()
@@ -732,6 +732,6 @@ def get_approval_snapshot(schedule_id: int, version: int, db: Db, manager: Manag
     row = db.scalar(select(Approval).where(Approval.schedule_id == schedule.id,
                                            Approval.version == version))
     if row is None:
-        raise HTTPException(404, f"No approval version {version} for this schedule")
+        raise HTTPException(404, f"Nu există versiunea de aprobare {version} pentru acest grafic")
     return ApprovalSnapshotOut(version=row.version, approved_by=row.approved_by,
                                approved_at=row.approved_at, snapshot=row.snapshot)

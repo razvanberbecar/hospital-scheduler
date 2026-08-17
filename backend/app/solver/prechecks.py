@@ -96,30 +96,30 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
         # the next two days, so a workable pool is a few people.
         if len(workers) < 3:
             issues.append(Issue("error", "roster_size",
-                                f"Infirmiere coverage needs at least 3 per day (1 day + 1 night + 1 x 8h); "
-                                f"the roster has only {len(workers)}."))
+                                f"Acoperirea infirmierelor necesită cel puțin 3 persoane pe zi (1 zi + 1 noapte + 1 × 8h); "
+                                f"pe grafic sunt doar {len(workers)}."))
     else:
         if len(heads) > 1:
             issues.append(Issue("error", "head_count",
-                                f"The roster has {len(heads)} manager_nurse accounts; at most one is supported."))
+                                f"Graficul are {len(heads)} conturi de asistentă șefă; este permis cel mult unul."))
         if not heads:
             issues.append(Issue("warning", "head_count",
-                                "No head nurse on the roster: the daily head-nurse 8h shift will not be scheduled."))
+                                "Nicio asistentă șefă pe grafic: tura zilnică de 8h a șefei nu va fi programată."))
         if len(workers) < 5:
             issues.append(Issue("error", "roster_size",
-                                f"Coverage needs at least 5 distinct nurses per day (2 day + 2 night + 1 kitchen); "
-                                f"the roster has only {len(workers)} besides the head nurse."))
+                                f"Acoperirea necesită cel puțin 5 asistente distincte pe zi (2 zi + 2 noapte + 1 bucătărie); "
+                                f"pe grafic sunt doar {len(workers)} în afară de asistenta șefă."))
 
         for section in (BIG, SMALL):
             pool = [n for n in workers if n.section == section]
             if not pool:
                 issues.append(Issue("warning", "section_pool",
-                                    f"Section {section} has no nurses: every day and night pair will be a "
-                                    f"same-section exception."))
+                                    f"Secția {SECTION_LABEL[section]} nu are nicio asistentă: fiecare pereche de zi și noapte "
+                                    f"va fi o excepție în aceeași secție."))
             elif len(pool) < 3:
                 issues.append(Issue("warning", "section_pool",
-                                    f"Section {section} has only {len(pool)} nurse(s) for ~{days} night and {days} day "
-                                    f"slots: expect heavy load."))
+                                    f"Secția {SECTION_LABEL[section]} are doar {len(pool)} asistentă(e) pentru ~{days} ture de "
+                                    f"noapte și {days} de zi: încărcare mare."))
 
         # --- per-section daily feasibility (each section must field a nurse) ---
         # Every day needs one Z and one N from each section (HARD). If all of a
@@ -138,43 +138,43 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
                 available = [n for n in pool if day not in off[n.id]]
                 if not available:
                     issues.append(Issue("error", "section_unavailable",
-                                        f"{SECTION_LABEL[section]}: every nurse in this section is on leave "
-                                        f"on {day}, but each day needs a day and a night nurse from the "
-                                        f"section.", date=day))
+                                        f"{SECTION_LABEL[section]}: toate asistentele din această secție sunt în concediu "
+                                        f"pe {day}, dar fiecare zi are nevoie de o asistentă de zi și una de noapte din "
+                                        f"secție.", date=day))
 
     # --- target sanity ----------------------------------------------------
     if inp.base_target % 4 != 0:
         issues.append(Issue("error", "target_granularity",
-                            f"Target {inp.base_target}h is not a multiple of 4: shift blocks are 12/8/4h, "
-                            f"so no nurse can ever land on it exactly."))
+                            f"Ținta de {inp.base_target}h nu este multiplu de 4: turele au blocuri de 12/8/4h, "
+                            f"așa că nicio asistentă nu o poate atinge exact."))
     hint = wd * 8
     if inp.base_target != hint:
         issues.append(Issue("info", "target_hint",
-                            f"Target {inp.base_target}h differs from the usual norm working_days x 8 = {hint}h "
-                            f"for {inp.month:02d}/{inp.year}."))
+                            f"Ținta de {inp.base_target}h diferă de norma obișnuită zile_lucrătoare × 8 = {hint}h "
+                            f"pentru {inp.month:02d}/{inp.year}."))
 
     # --- leave validation (Co only on Mon-Fri working days) ----------------
     for nid, co_days in inp.leave.items():
         if nid not in by_id:
-            issues.append(Issue("error", "leave_unknown_nurse", f"Leave given for unknown nurse id {nid}."))
+            issues.append(Issue("error", "leave_unknown_nurse", f"Concediu atribuit unei asistente necunoscute (id {nid})."))
             continue
         for day in sorted(co_days):
             if day.year != inp.year or day.month != inp.month:
                 issues.append(Issue("error", "leave_outside_month",
-                                    f"{by_id[nid].name}: leave day {day} is outside {inp.month:02d}/{inp.year}.",
+                                    f"{by_id[nid].name}: ziua de concediu {day} este în afara lunii {inp.month:02d}/{inp.year}.",
                                     nurse_id=nid, date=day))
             elif cal.is_offday(day, holidays):
                 issues.append(Issue("error", "leave_on_offday",
-                                    f"{by_id[nid].name}: leave on {day} is invalid - Co is allowed only on "
-                                    f"Monday-Friday working days (decided).", nurse_id=nid, date=day))
+                                    f"{by_id[nid].name}: concediul pe {day} este invalid - Co se poate pune doar în "
+                                    f"zilele lucrătoare, luni-vineri.", nurse_id=nid, date=day))
 
     # --- kitchen capacity (asistente only) ----------------------------------
     if not is_aide:
         kitchen_pool = [n for n in workers if n.kitchen_capable]
         if not kitchen_pool:
             issues.append(Issue("error", "kitchen_pool",
-                                f"The kitchen shift runs every day ({days} shifts) but no rostered nurse is "
-                                f"kitchen-capable."))
+                                f"Tura de bucătărie se ține în fiecare zi ({days} ture), dar nicio asistentă de pe "
+                                f"grafic nu poate lucra la bucătărie."))
         else:
             capacity = 0
             for n in kitchen_pool:
@@ -185,16 +185,16 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
                 capacity += max(0, min(by_days, by_hours))
             if capacity < days:
                 issues.append(Issue("error", "kitchen_capacity",
-                                    f"{days} kitchen shifts needed but the {len(kitchen_pool)} kitchen-capable "
-                                    f"nurse(s) can cover at most {capacity} within their hours - add "
-                                    f"kitchen-capable nurses to the roster."))
+                                    f"Sunt necesare {days} ture de bucătărie, dar cele {len(kitchen_pool)} asistente care "
+                                    f"pot lucra la bucătărie acoperă cel mult {capacity} în limita orelor lor - adaugă "
+                                    f"asistente cu bucătărie pe grafic."))
             elif len(kitchen_pool) == 1:
                 issues.append(Issue("error", "kitchen_pool",
-                                    f"Only one kitchen-capable nurse for {days} kitchen shifts - impossible "
-                                    f"within one nurse's monthly hours."))
+                                    f"O singură asistentă poate lucra la bucătărie pentru {days} ture - imposibil în "
+                                    f"limita orelor lunare ale unei singure asistente."))
             elif len(kitchen_pool) == 2:
                 issues.append(Issue("warning", "kitchen_pool",
-                                    "Only two kitchen-capable nurses: the kitchen rotation will be tight."))
+                                    "Doar două asistente pot lucra la bucătărie: rotația de bucătărie va fi strânsă."))
 
     # --- hour supply vs demand ---------------------------------------------
     # Minimum daily coverage: asistente 2Z + 2N + 1K = 56h; infirmiere
@@ -211,12 +211,12 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
         ceiling_hours = ((2 + cfg.extra_day_cap) * 12 + (2 + cfg.extra_night_cap) * 12 + 8) * days + 8 * len(workers)
     if required_worked < floor_hours:
         issues.append(Issue("error", "supply_low",
-                            f"The roster supplies {required_worked}h of work but minimum coverage costs "
-                            f"{floor_hours}h. Add staff, reduce leave, or raise the target."))
+                            f"Graficul oferă {required_worked}h de muncă, dar acoperirea minimă costă "
+                            f"{floor_hours}h. Adaugă personal, redu concediile sau crește ținta."))
     if required_worked > ceiling_hours:
         issues.append(Issue("error", "supply_high",
-                            f"The roster must place {required_worked}h but staffing caps absorb at most "
-                            f"{ceiling_hours}h. Remove staff or lower the target."))
+                            f"Graficul trebuie să plaseze {required_worked}h, dar plafoanele de personal absorb cel mult "
+                            f"{ceiling_hours}h. Scoate personal sau scade ținta."))
 
     # --- per-nurse reachability & the 3-nights collision --------------------
     night_min = per_nurse_night_minimum(inp, holidays)
@@ -229,14 +229,14 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
         available_days = sum(1 for d in dates if d not in off_limits)
         if available_days * 12 + cfg.band < required:
             issues.append(Issue("error", "nurse_unreachable",
-                                f"{n.name}: needs {required}h worked but only {available_days} available days "
-                                f"(max {available_days * 12}h). Target unreachable even with the +/-{cfg.band}h band.",
+                                f"{n.name}: are nevoie de {required}h lucrate, dar doar {available_days} zile disponibile "
+                                f"(maxim {available_days * 12}h). Ținta nu poate fi atinsă nici cu marja de ±{cfg.band}h.",
                                 nurse_id=n.id))
         minimum, relaxed = night_min[n.id]
         if relaxed:
             issues.append(Issue("warning", "nights_relaxed",
-                                f"{n.name}: leave makes the 3-night minimum impossible; relaxed to {minimum} "
-                                f"night(s) and flagged (decided: flag, don't block).", nurse_id=n.id))
+                                f"{n.name}: concediul face imposibil minimul de 3 nopți; relaxat la {minimum} "
+                                f"noapte/nopți și semnalat.", nurse_id=n.id))
 
     # --- head nurse arithmetic ----------------------------------------------
     for h in heads:
@@ -244,8 +244,8 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
         owed = inp.effective_target(h.id) - total
         if owed != 0:
             issues.append(Issue("warning", "head_owed",
-                                f"{h.name} (head nurse) works only weekday 8h shifts: fixed total {total}h vs "
-                                f"monthly target {inp.effective_target(h.id)}h is off by {owed:+d}h.",
+                                f"{h.name} (asistentă șefă) lucrează doar ture de 8h în zilele lucrătoare: totalul fix "
+                                f"de {total}h față de ținta lunară de {inp.effective_target(h.id)}h diferă cu {owed:+d}h.",
                                 nurse_id=h.id))
 
     # --- leave crunches (plan 4: relaxed-rule thresholds) ---------------------
@@ -290,8 +290,8 @@ def _leave_crunch_issues(inp: ScheduleInput, holidays: set[dt.date]) -> list[Iss
         for run in _runs(short):
             span = _span(dates, run)
             issues.append(Issue("error", "infirmiere_leave_crunch",
-                                f"Infirmiere: fewer than 3 available on {span} - a day needs "
-                                f"1 day + 1 night + 1 x 8h (3 distinct people); too many are on Co.",
+                                f"Infirmiere: mai puțin de 3 disponibile pe {span} - o zi are nevoie de "
+                                f"1 zi + 1 noapte + 1 × 8h (3 persoane distincte); prea multe sunt în Co.",
                                 date=dates[run[0]]))
         return issues
 
@@ -319,8 +319,8 @@ def _leave_crunch_issues(inp: ScheduleInput, holidays: set[dt.date]) -> list[Iss
         for run in _runs([i for i, s in enumerate(avail) if len(s) == 1]):
             names = _names(by_id, set().union(*(avail[i] for i in run)))
             issues.append(Issue("error", "section_leave_crunch",
-                                f"{label}: only {names} available on {_span(dates, run)} - each "
-                                f"day needs a day and a night nurse from the section (2 people).",
+                                f"{label}: doar {names} disponibilă(e) pe {_span(dates, run)} - fiecare "
+                                f"zi are nevoie de o asistentă de zi și una de noapte din secție (2 persoane).",
                                 date=dates[run[0]]))
 
         # Each 2-day window: a union of <3 distinct people cannot cover Z+N on
@@ -332,9 +332,9 @@ def _leave_crunch_issues(inp: ScheduleInput, holidays: set[dt.date]) -> list[Iss
         for run in _runs(sorted({i for w in two for i in (w, w + 1)})):
             names = _names(by_id, set().union(*(avail[i] for i in run)))
             issues.append(Issue("error", "section_leave_crunch",
-                                f"{label}: only {names} available across {_span(dates, run)} - two "
-                                f"people cannot fill Z+N on consecutive days (a night blocks the "
-                                f"next day).", date=dates[run[0]]))
+                                f"{label}: doar {names} disponibilă(e) în intervalul {_span(dates, run)} - două "
+                                f"persoane nu pot acoperi Z+N în zile consecutive (o noapte blochează "
+                                f"ziua următoare).", date=dates[run[0]]))
 
         # Each 3-day window: a union of <4 with everyone otherwise available is a
         # soft warning - the stretch will lean on 48h-rest exceptions.
@@ -348,8 +348,8 @@ def _leave_crunch_issues(inp: ScheduleInput, holidays: set[dt.date]) -> list[Iss
             names = _names(by_id, union)
             on_leave = _names(by_id, {w.id for w in sec_workers if w.id not in union})
             issues.append(Issue("warning", "section_leave_warning",
-                                f"{label}: only {names} are available on {_span(dates, run)} "
-                                f"({on_leave} on Co) - expect 48h-rest exceptions.",
+                                f"{label}: doar {names} sunt disponibile pe {_span(dates, run)} "
+                                f"({on_leave} în Co) - sunt de așteptat excepții de la odihna de 48h.",
                                 date=dates[run[0]]))
     return issues
 
@@ -359,7 +359,7 @@ def _span(dates: list[dt.date], run: list[int]) -> str:
 
 
 def _names(by_id: dict[int, Nurse], ids: set[int]) -> str:
-    return ", ".join(sorted(by_id[i].name for i in ids)) or "no one"
+    return ", ".join(sorted(by_id[i].name for i in ids)) or "nimeni"
 
 
 def effective_requests(inp: ScheduleInput) -> tuple[list[ShiftRequest], list[Issue]]:
@@ -382,27 +382,27 @@ def effective_requests(inp: ScheduleInput) -> tuple[list[ShiftRequest], list[Iss
         nurse = by_id.get(r.nurse_id)
         if nurse is None:
             issues.append(Issue("error", "request_unknown_nurse",
-                                f"Request for unknown nurse id {r.nurse_id}."))
+                                f"Cerere pentru o asistentă necunoscută (id {r.nurse_id})."))
             continue
-        label = f"request {r.kind} on {r.date}"
-        must = "impossible (must-have)" if r.hard else "ignored"
+        label = f"cererea {r.kind} pe {r.date}"
+        must = "imposibil (obligatorie)" if r.hard else "ignorată"
         level = "error" if r.hard else "warning"
         if r.kind not in REQUEST_KINDS:
             issues.append(Issue("error", "request_kind",
-                                f"{nurse.name}: unknown request kind {r.kind!r}.", r.nurse_id, r.date))
+                                f"{nurse.name}: tip de cerere necunoscut {r.kind!r}.", r.nurse_id, r.date))
             continue
         if r.date.year != inp.year or r.date.month != inp.month:
             issues.append(Issue("error", "request_outside_month",
-                                f"{nurse.name}: {label} is outside the month.", r.nurse_id, r.date))
+                                f"{nurse.name}: {label} este în afara lunii.", r.nurse_id, r.date))
             continue
         if nurse.is_head:
             issues.append(Issue("warning", "request_head",
-                                f"{nurse.name} is the head nurse and her pattern is fixed - {label} ignored.",
+                                f"{nurse.name} este asistenta șefă și programul ei este fix - {label} ignorată.",
                                 r.nurse_id, r.date))
             continue
         if r.date in inp.leave_of(r.nurse_id):
             issues.append(Issue(level, "request_on_leave",
-                                f"{nurse.name}: {label} falls on her Co day - {must}.", r.nurse_id, r.date))
+                                f"{nurse.name}: {label} cade în ziua ei de Co - {must}.", r.nurse_id, r.date))
             continue
         if r.date in blocked[r.nurse_id]:
             # Dropped like a request on a Co day: she is away across this
@@ -410,28 +410,28 @@ def effective_requests(inp: ScheduleInput) -> tuple[list[ShiftRequest], list[Iss
             # here keeps the solver and the validator agreeing - otherwise a hard
             # request would be silently ignored by one and flagged by the other.
             issues.append(Issue(level, "request_on_leave_bridge",
-                                f"{nurse.name}: {label} falls on a weekend she is away across "
-                                f"(Co either side) - {must}.", r.nurse_id, r.date))
+                                f"{nurse.name}: {label} cade într-un weekend în care este plecată "
+                                f"(Co de ambele părți) - {must}.", r.nurse_id, r.date))
             continue
         if r.kind == "N" and r.date in no_night[r.nurse_id]:
             # Same parity reason as request_on_leave_bridge: the model has no
             # NIGHT variable here, so leaving the request in would have the
             # solver ignore it while the validator flags it.
             issues.append(Issue(level, "request_night_before_leave",
-                                f"{nurse.name}: {label} is the day before her Co day and would "
-                                f"run into it - {must}.", r.nurse_id, r.date))
+                                f"{nurse.name}: {label} este cu o zi înainte de ziua ei de Co și ar "
+                                f"intra în ea - {must}.", r.nurse_id, r.date))
             continue
         if r.kind == "K" and not nurse.kitchen_capable:
             issues.append(Issue(level, "request_kitchen",
-                                f"{nurse.name}: kitchen {label} but she is not kitchen-capable - {must}.",
+                                f"{nurse.name}: {label} la bucătărie, dar nu poate lucra la bucătărie - {must}.",
                                 r.nurse_id, r.date))
             continue
         key = (r.nurse_id, r.date)
         if key in seen:
             if seen[key] != r.kind:
                 issues.append(Issue("error", "request_conflict",
-                                    f"{nurse.name}: conflicting requests on {r.date} "
-                                    f"({seen[key]} and {r.kind}).", r.nurse_id, r.date))
+                                    f"{nurse.name}: cereri în conflict pe {r.date} "
+                                    f"({seen[key]} și {r.kind}).", r.nurse_id, r.date))
             continue
         seen[key] = r.kind
         kept.append(r)
@@ -443,7 +443,7 @@ def effective_requests(inp: ScheduleInput) -> tuple[list[ShiftRequest], list[Iss
     for (day, kind), count in Counter((r.date, r.kind) for r in hards if r.kind != "FREE").items():
         if count > cap[kind]:
             issues.append(Issue("error", "request_overbooked",
-                                f"{count} must-have {kind} requests on {day} but the daily cap is {cap[kind]}."))
+                                f"{count} cereri obligatorii {kind} pe {day}, dar plafonul zilnic este {cap[kind]}."))
     by_nurse: dict[int, dict[dt.date, str]] = {}
     for r in hards:
         by_nurse.setdefault(r.nurse_id, {})[r.date] = r.kind
@@ -454,12 +454,12 @@ def effective_requests(inp: ScheduleInput) -> tuple[list[ShiftRequest], list[Iss
             nxt2 = day_map.get(day + dt.timedelta(days=2))
             if kind == "N" and (nxt1 not in (None, "FREE") or nxt2 not in (None, "FREE")):
                 issues.append(Issue("error", "request_rest",
-                                    f"{name}: a must-have night on {day} requires 48h of rest - the must-have "
-                                    f"request on the following day(s) cannot hold.", nid, day))
+                                    f"{name}: o noapte obligatorie pe {day} necesită 48h de odihnă - cererea "
+                                    f"obligatorie din ziua/zilele următoare nu poate fi respectată.", nid, day))
             elif kind == "Z" and nxt1 not in (None, "FREE", "N"):
                 issues.append(Issue("error", "request_rest",
-                                    f"{name}: after a must-have day shift on {day} only a night may follow "
-                                    f"the next day, not {nxt1}.", nid, day))
+                                    f"{name}: după o tură de zi obligatorie pe {day}, în ziua următoare poate urma "
+                                    f"doar o noapte, nu {nxt1}.", nid, day))
     return kept, issues
 
 

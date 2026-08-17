@@ -107,7 +107,8 @@ export function nameOf(roster: RosterEntryOut[], userId: number | null | undefin
 
 /**
  * An issue's message prefixed with the nurse name and date when present.
- * Messages themselves are English tech-speak, displayed as-is (v1).
+ * Messages arrive already localized (Romanian) from the backend and are
+ * displayed as-is.
  */
 export function issueText(issue: IssueOut, roster: RosterEntryOut[]): string {
   const bits: string[] = [];

@@ -25,7 +25,7 @@ def _rate_limit(request: Request, settings: Settings) -> None:
     now = time.monotonic()
     window = [t for t in attempts.get(key, []) if now - t < 60]
     if len(window) >= settings.login_rate_per_minute:
-        raise HTTPException(429, "Too many login attempts; try again in a minute")
+        raise HTTPException(429, "Prea multe încercări de autentificare; încearcă din nou într-un minut")
     window.append(now)
     attempts[key] = window
 
@@ -40,7 +40,7 @@ def login(
     _rate_limit(request, settings)
     user = db.scalar(select(User).where(User.username == body.username.strip().lower()))
     if user is None or not verify_password(body.password, user.password_hash) or not user.active:
-        raise HTTPException(401, "Wrong username or password")
+        raise HTTPException(401, "Utilizator sau parolă greșită")
     return TokenOut(
         access_token=create_access_token(settings, user.id),
         refresh_token=create_refresh_token(settings, user.id),
@@ -56,10 +56,10 @@ def refresh(
 ) -> AccessOut:
     user_id = decode_token(settings, body.refresh_token, "refresh")
     if user_id is None:
-        raise HTTPException(401, "Invalid or expired refresh token")
+        raise HTTPException(401, "Token de reîmprospătare invalid sau expirat")
     user = db.get(User, user_id)
     if user is None or not user.active:
-        raise HTTPException(401, "Account is not active")
+        raise HTTPException(401, "Contul nu este activ")
     return AccessOut(access_token=create_access_token(settings, user.id))
 
 
@@ -76,7 +76,7 @@ def change_password(
     db: Annotated[Session, Depends(get_db)],
 ) -> User:
     if not verify_password(body.current_password, user.password_hash):
-        raise HTTPException(400, "Current password is wrong")
+        raise HTTPException(400, "Parola curentă este greșită")
     user.password_hash = hash_password(body.new_password, settings.bcrypt_rounds)
     user.must_change_password = False
     db.add(user)

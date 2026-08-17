@@ -44,11 +44,11 @@ def reorder_users(
     existing_ids = set(db.scalars(select(User.id)))
     ordered = body.ordered_ids
     if len(ordered) != len(set(ordered)):
-        raise HTTPException(422, "ordered_ids contains duplicate ids")
+        raise HTTPException(422, "Lista de ordine conține id-uri duplicate")
     if set(ordered) != existing_ids:
         raise HTTPException(
-            422, "ordered_ids must list every existing user exactly once "
-                 "(including inactive accounts)")
+            422, "Lista de ordine trebuie să conțină fiecare utilizator existent exact o dată "
+                 "(inclusiv conturile inactive)")
     users = {u.id: u for u in db.scalars(select(User))}
     for pos, uid in enumerate(ordered, start=1):
         users[uid].position = pos
@@ -64,9 +64,9 @@ def create_user(
 ) -> UserCreatedOut:
     username = body.username.strip().lower()
     if db.scalar(select(User).where(User.username == username)) is not None:
-        raise HTTPException(409, f"Username '{username}' is already taken")
+        raise HTTPException(409, f"Numele de utilizator '{username}' este deja folosit")
     if body.role == ROLE_MANAGER and _manager_conflict(db):
-        raise HTTPException(409, "There is already an active manager account")
+        raise HTTPException(409, "Există deja un cont de asistentă șefă activ")
     temp = body.temporary_password or generate_temp_password()
     max_pos = db.scalar(select(func.max(User.position)))
     user = User(
@@ -95,25 +95,25 @@ def update_user(
 ) -> User:
     user = db.get(User, user_id)
     if user is None:
-        raise HTTPException(404, "No such account")
+        raise HTTPException(404, "Cont inexistent")
     changes = body.model_dump(exclude_unset=True)
     if user.id == manager.id and changes.get("active") is False:
-        raise HTTPException(400, "You cannot deactivate your own account")
+        raise HTTPException(400, "Nu îți poți dezactiva propriul cont")
     if user.id == manager.id and changes.get("role") == "nurse":
-        raise HTTPException(400, "You cannot demote your own account")
+        raise HTTPException(400, "Nu îți poți retrograda propriul cont")
     # staff-type consistency (staff_type itself is immutable and absent from
     # UserUpdate): the same rules UserCreate enforces must hold on update.
     if user.staff_type == STAFF_AIDE:
         if changes.get("role") == ROLE_MANAGER:
-            raise HTTPException(422, "An infirmiera account must keep the plain nurse role")
+            raise HTTPException(422, "Un cont de infirmieră trebuie să păstreze rolul de bază de asistentă")
         if changes.get("section") is not None:
-            raise HTTPException(422, "Infirmiere have no section (one ward-wide pool)")
+            raise HTTPException(422, "Infirmierele nu au secție (un singur grup pentru tot salonul)")
         if changes.get("default_kitchen_capable"):
-            raise HTTPException(422, "Infirmiere cannot be kitchen-capable")
+            raise HTTPException(422, "Infirmierele nu pot lucra la bucătărie")
     elif "section" in changes and changes["section"] is None:
-        raise HTTPException(422, "A section (BIG or SMALL) is required for asistente")
+        raise HTTPException(422, "Este necesară o secție (Copii Mari sau Sugari) pentru asistente")
     if changes.get("role") == ROLE_MANAGER and _manager_conflict(db, exclude_id=user.id):
-        raise HTTPException(409, "There is already an active manager account")
+        raise HTTPException(409, "Există deja un cont de asistentă șefă activ")
     for field, value in changes.items():
         setattr(user, field, value)
     db.add(user)
@@ -133,9 +133,9 @@ def delete_user(
     the manager is told to deactivate instead - or when deleting oneself."""
     user = db.get(User, user_id)
     if user is None:
-        raise HTTPException(404, "No such account")
+        raise HTTPException(404, "Cont inexistent")
     if user.id == manager.id:
-        raise HTTPException(409, "You cannot delete your own account")
+        raise HTTPException(409, "Nu îți poți șterge propriul cont")
     referenced = (
         db.scalar(select(ScheduleNurse.id).where(ScheduleNurse.user_id == user_id))
         or db.scalar(select(DayOff.id).where(DayOff.user_id == user_id))
@@ -144,7 +144,7 @@ def delete_user(
         or db.scalar(select(Approval.id).where(Approval.approved_by == user_id))
     )
     if referenced is not None:
-        raise HTTPException(409, "This account is part of schedule history; deactivate it instead of deleting")
+        raise HTTPException(409, "Acest cont face parte din istoricul graficelor; dezactivează-l în loc să-l ștergi")
     db.delete(user)
     db.commit()
     return Response(status_code=204)
@@ -158,7 +158,7 @@ def reset_password(
 ) -> ResetPasswordOut:
     user = db.get(User, user_id)
     if user is None:
-        raise HTTPException(404, "No such account")
+        raise HTTPException(404, "Cont inexistent")
     temp = generate_temp_password()
     user.password_hash = hash_password(temp, settings.bcrypt_rounds)
     user.must_change_password = True

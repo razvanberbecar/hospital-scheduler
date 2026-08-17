@@ -46,7 +46,7 @@ def replace_holidays(
 ) -> list[Holiday]:
     for item in body.holidays:
         if item.date.year != body.year:
-            raise HTTPException(400, f"Holiday {item.date} is not in year {body.year}")
+            raise HTTPException(400, f"Sărbătoarea {item.date} nu este în anul {body.year}")
     db.execute(delete(Holiday).where(
         Holiday.date >= dt.date(body.year, 1, 1), Holiday.date <= dt.date(body.year, 12, 31)))
     for item in body.holidays:

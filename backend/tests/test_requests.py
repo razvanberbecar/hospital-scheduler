@@ -106,8 +106,8 @@ def test_infeasible_hard_requests_are_explained_in_the_diagnosis():
     res = solve(inp)
     assert res.status == "INFEASIBLE", res.status
     assert res.diagnosis, "an infeasible run with hard requests must be explained"
-    assert res.diagnosis[0].startswith("The must-have requests cannot all be honored")
-    assert any(f"FREE on {day}" in line for line in res.diagnosis[1:])
+    assert res.diagnosis[0].startswith("Cererile obligatorii nu pot fi toate respectate")
+    assert any(f"FREE pe {day}" in line for line in res.diagnosis[1:])
 
 
 def test_removing_a_hard_request_assignment_is_a_violation(bundle_result):

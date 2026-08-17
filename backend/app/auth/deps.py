@@ -32,24 +32,24 @@ def get_current_user(
     db: Annotated[Session, Depends(get_db)],
 ) -> User:
     if creds is None:
-        raise HTTPException(401, "Not authenticated")
+        raise HTTPException(401, "Neautentificat")
     user_id = decode_token(settings, creds.credentials, "access")
     if user_id is None:
-        raise HTTPException(401, "Invalid or expired token")
+        raise HTTPException(401, "Token invalid sau expirat")
     user = db.get(User, user_id)
     if user is None or not user.active:
-        raise HTTPException(401, "Account is not active")
+        raise HTTPException(401, "Contul nu este activ")
     return user
 
 
 def require_manager(user: Annotated[User, Depends(get_current_user)]) -> User:
     if not user.is_manager:
-        raise HTTPException(403, "Manager access required")
+        raise HTTPException(403, "Este necesar acces de asistentă șefă")
     return user
 
 
 def require_password_changed(user: Annotated[User, Depends(require_manager)]) -> User:
     """Business endpoints stay locked until the temporary password is replaced."""
     if user.must_change_password:
-        raise HTTPException(403, "Change your temporary password first")
+        raise HTTPException(403, "Schimbă mai întâi parola temporară")
     return user

@@ -447,11 +447,11 @@ def _explain_hard_requests(inp: ScheduleInput,
         return None
     denied = {(r.nurse_id, r.date, r.kind) for r, granted in res.requests if not granted}
     by_id = {n.id: n for n in inp.nurses}
-    lines = ["The must-have requests cannot all be honored; a valid schedule "
-             "exists without these:"]
+    lines = ["Cererile obligatorii nu pot fi toate respectate; un grafic valid "
+             "există fără acestea:"]
     for r in hard_reqs:
         if (r.nurse_id, r.date, r.kind) in denied:
-            lines.append(f"{by_id[r.nurse_id].name}: {r.kind} on {r.date}")
+            lines.append(f"{by_id[r.nurse_id].name}: {r.kind} pe {r.date}")
     return lines
 
 
@@ -516,7 +516,7 @@ def _diagnose(inp: ScheduleInput, holidays: set[dt.date],
     slacks = []
     if is_aide:
         for di, day in enumerate(dates):
-            for label, s in (("day (Z)", Shift.DAY), ("night (N)", Shift.NIGHT),
+            for label, s in (("zi (Z)", Shift.DAY), ("noapte (N)", Shift.NIGHT),
                              ("8h", Shift.EIGHT)):
                 pool = [x[k] for n in workers if (k := (n.id, di, s)) in x]
                 sl = m.NewIntVar(0, 1, f"slack_{s.value}_{di}")
@@ -533,8 +533,8 @@ def _diagnose(inp: ScheduleInput, holidays: set[dt.date],
             head_z = 1 if head_shift is Shift.DAY else 0
             head_n = 1 if head_shift is Shift.NIGHT else 0
             head_k = 1 if head_shift is Shift.KITCHEN else 0
-            for label, s, head_here in (("day", Shift.DAY, head_z),
-                                        ("night", Shift.NIGHT, head_n)):
+            for label, s, head_here in (("zi", Shift.DAY, head_z),
+                                        ("noapte", Shift.NIGHT, head_n)):
                 for section in (BIG, SMALL):
                     pool = [x[k] for n in workers
                             if n.section == section and (k := (n.id, di, s)) in x]
@@ -545,19 +545,20 @@ def _diagnose(inp: ScheduleInput, holidays: set[dt.date],
             kpool = [x[k] for n in workers if (k := (n.id, di, Shift.KITCHEN)) in x]
             ksl = m.NewIntVar(0, 1, f"slack_kitchen_{di}")
             m.Add(sum(kpool) + head_k + ksl >= 1)
-            slacks.append((day, "kitchen", ksl, 1))
+            slacks.append((day, "bucătărie", ksl, 1))
     m.Minimize(sum(sl for *_, sl, _n in slacks))
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = min(10.0, cfg.max_time_s)
     solver.parameters.random_seed = cfg.seed
     if solver.Solve(m) not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return ["The roster cannot satisfy basic daily coverage at all; add nurses."]
+        return ["Graficul nu poate acoperi deloc necesarul zilnic de bază; adaugă asistente."]
     out = []
     for day, label, sl, need in slacks:
         v = solver.Value(sl)
         if v:
-            out.append(f"{day}: {label} coverage short by {v} (needs {need}) even ignoring hour targets.")
+            out.append(f"{day}: acoperire {label} insuficientă cu {v} (necesar {need}), chiar ignorând țintele de ore.")
     if not out:
-        out.append("Coverage alone is satisfiable; the conflict comes from hour targets, the weekend rule, "
-                   "night minimums or rest rules interacting. Try widening the band or adjusting leave.")
+        out.append("Acoperirea în sine este realizabilă; conflictul vine din interacțiunea dintre țintele de ore, "
+                   "regula de weekend, minimul de nopți sau regulile de odihnă. Încearcă să lărgești marja sau "
+                   "să ajustezi concediile.")
     return out

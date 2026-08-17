@@ -691,7 +691,8 @@ function SolverReport({
   return (
     <div className="solver-report">
       <p>
-        <strong>{t("detail.solverStatus")}:</strong> {report.solver_status}
+        <strong>{t("detail.solverStatus")}:</strong>{" "}
+        {t(`solverState.${report.solver_status}`, { defaultValue: report.solver_status })}
         {report.objective != null && ` · ${t("detail.objective")}: ${report.objective}`}
       </p>
       {grantedSummary && <p>{grantedSummary}</p>}
@@ -727,7 +728,7 @@ function GenerateError({
   return (
     <>
       <p>
-        {t("detail.solverFailed")} ({error.solver_status})
+        {t("detail.solverFailed")} ({t(`solverState.${error.solver_status}`, { defaultValue: error.solver_status })})
       </p>
       <ul className="issue-list issue-violation">
         {error.diagnosis.map((d, idx) => (

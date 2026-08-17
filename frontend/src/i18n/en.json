@@ -155,6 +155,14 @@
     "solverFailed": "The solver found no solution",
     "setupOnlyDraft": "Setup is only available for draft months."
   },
+  "solverState": {
+    "OPTIMAL": "Optimal",
+    "FEASIBLE": "Feasible",
+    "INFEASIBLE": "Infeasible",
+    "UNKNOWN": "Unknown",
+    "MODEL_INVALID": "Invalid model",
+    "PRECHECK_FAILED": "Pre-checks failed"
+  },
   "request": {
     "date": "Date",
     "kind": "Type",

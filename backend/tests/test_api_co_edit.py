@@ -115,7 +115,7 @@ def test_a_shift_replaces_an_existing_co(draft):
 def test_co_is_refused_on_a_weekend(draft, day):
     r = _edit(draft, draft["ids"]["lung.paula"], day, "Co")
     assert r.status_code == 422
-    assert "Monday-Friday" in r.json()["detail"]
+    assert "luni-vineri" in r.json()["detail"]
 
 
 def test_co_is_refused_on_a_public_holiday(draft):
