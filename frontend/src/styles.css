@@ -588,6 +588,11 @@ select {
   z-index: 2;
 }
 
+/* A single thick rule dividing the two asistente sections (no section labels). */
+.grid tbody tr.section-divider td {
+  border-top: 3px solid #16528e;
+}
+
 .grid .cell {
   height: 24px;
 }

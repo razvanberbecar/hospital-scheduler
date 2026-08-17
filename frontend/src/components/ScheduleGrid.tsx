@@ -16,7 +16,7 @@ import type {
   StaffType,
 } from "../api/types";
 import { dayOf, isWeekend } from "../lib/dates";
-import { cellView, sectionLabel } from "../lib/schedule";
+import { cellView } from "../lib/schedule";
 
 type GridAssignment = AssignmentOut | SnapshotAssignment;
 
@@ -147,16 +147,23 @@ export default function ScheduleGrid(props: ScheduleGridProps) {
             // may appear as more than one band, so `sec-${section}` alone would
             // collide.
             <Fragment key={`sec-${gi}-${g.section}`}>
-              <tr className="section-row">
-                <td className="name-col section-label">
-                  {g.section == null ? t("staff.infirmierePlural") : sectionLabel(g.section, t)}
-                </td>
-                <td colSpan={days.length + totalColSpan} className="section-fill" />
-              </tr>
-              {g.nurses.map((n) => {
+              {/* Infirmiere are one ward-wide pool: keep their single band
+                  header. Asistente drop the section labels entirely - a single
+                  thick rule (below) marks the first section boundary instead. */}
+              {isAide && (
+                <tr className="section-row">
+                  <td className="name-col section-label">{t("staff.infirmierePlural")}</td>
+                  <td colSpan={days.length + totalColSpan} className="section-fill" />
+                </tr>
+              )}
+              {g.nurses.map((n, ni) => {
                 const tot = totalsMap.get(n.user_id);
+                // One thick divider at the first section change (Copii Mari ->
+                // Sugari): the second band's first row. Infirmiere have no
+                // sections, so this never applies to them.
+                const sectionDivider = !isAide && gi === 1 && ni === 0;
                 return (
-                  <tr key={n.user_id}>
+                  <tr key={n.user_id} className={sectionDivider ? "section-divider" : undefined}>
                     <td className="name-col">{n.full_name}</td>
                     {days.map((d) => {
                       const cv = cellView(
