@@ -6,8 +6,10 @@ Terminology follows the planning document (Hospital_Scheduling_Plan.docx v0.5):
   8 (infirmiere 8h day slot). Clock times differ by staff type - asistente work
   07-19/19-07, infirmiere 06-18/18-06 - see NIGHT_SPLIT.
 
-Months no longer carry any hour debt: every month stands alone and each nurse
-simply aims for the schedule's base target. The signed distance to that target
+Months no longer carry any hour debt: every month stands alone. Each nurse aims
+for the schedule's base target, less a slice of its overtime for every Co day she
+takes (see ScheduleInput.effective_target), so a nurse on leave does less overtime
+than one who worked the whole month. The signed distance to that target
 (owed = total - target) is still reported and, beyond Config.band, blocks
 approval - but nothing rolls into the next month.
 """
@@ -132,9 +134,29 @@ class ScheduleInput:
     locks: list[Assignment] = field(default_factory=list)  # cells pinned before solving (M3 editor)
 
     def effective_target(self, nurse_id: int) -> int:
-        """The target every nurse aims for. Months no longer carry hour debt, so
-        this is simply the schedule's base target for everyone."""
-        return self.base_target
+        """The hour target this nurse aims for.
+
+        A nurse with Co (concediu) does less overtime than a colleague who works
+        the whole month (decided 2026-09-15): the overtime portion - the part of
+        base_target above the month's working-days norm (working_days x 8) - is
+        scaled down in proportion to her Co days, so every Co day sheds a slice of
+        it and a full month of Co removes it entirely. A nurse with no Co keeps
+        the full base_target, so vacationers never carry the same overtime as the
+        ones who worked all month. When base_target is at or below the norm there
+        is no overtime to scale and everyone keeps base_target. Months carry no
+        hour debt - each stands alone, nothing rolls into the next.
+        """
+        from . import calendar as cal  # local: calendar imports domain
+        co_days = len(self.leave_of(nurse_id))
+        if co_days == 0:
+            return self.base_target
+        holidays = self.holidays if self.holidays is not None \
+            else cal.default_holidays(self.year, self.month)
+        wd = cal.working_days(self.year, self.month, holidays)
+        overtime = self.base_target - wd * 8
+        if overtime <= 0:
+            return self.base_target
+        return self.base_target - round(overtime * co_days / wd)
 
     def leave_of(self, nurse_id: int) -> set[dt.date]:
         return self.leave.get(nurse_id, set())
