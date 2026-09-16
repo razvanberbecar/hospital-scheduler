@@ -102,6 +102,14 @@ class Config:
     w_request: int = 500          # per denied request (below targets, above top-ups)
     w_topup: int = 300            # per top-up used
     w_wspread: int = 50           # weekend-hours spread across nurses
+    # Per weekend/holiday hour, times the nurse's Co days: pushes the 100%-bonus
+    # hours (the "Ore 100%" column) off staff who were on leave and onto those who
+    # worked the whole month, so a vacationer carries fewer of them (decided
+    # 2026-09-16). Zero for anyone without Co, so it never touches a leave-free
+    # month. Kept well under w_dev (1000/hour): it only redistributes weekend
+    # hours between nurses, never at the cost of an hour target - and w_wspread
+    # still keeps the drop graduated instead of dumping a vacationer to zero.
+    w_weekend_leave: int = 20
     w_nspread: int = 30           # night-count spread across nurses
     w_kitchen_run: int = 20       # >3 consecutive kitchen days
     w_cluster: int = 20           # >5 working days in any 7-day window

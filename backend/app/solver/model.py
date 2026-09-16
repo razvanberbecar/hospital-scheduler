@@ -375,6 +375,14 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
 
     # --- objective ------------------------------------------------------------------
     objective_terms.append(cfg.w_dev * sum(absowed.values()))
+    # Weekend/holiday ("Ore 100%") fairness vs leave: charge each nurse's weekend
+    # hours in proportion to her Co days, so the solver moves those bonus hours to
+    # staff who worked the whole month. w_wspread above still equalises the raw
+    # spread, so a vacationer's hours ease down instead of collapsing to zero.
+    leave_days = {n.id: len(inp.leave_of(n.id)) for n in workers}
+    if cfg.w_weekend_leave and any(leave_days.values()):
+        objective_terms.append(cfg.w_weekend_leave *
+                               sum(leave_days[n.id] * weekend_of[n.id] for n in workers))
     if request_pen_terms:
         objective_terms.append(cfg.w_request * sum(request_pen_terms))
     all_tops = list(t4.values()) + list(t8.values())
