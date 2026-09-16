@@ -238,6 +238,21 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
                                 f"{n.name}: concediul face imposibil minimul de 3 nopți; relaxat la {minimum} "
                                 f"noapte/nopți și semnalat.", nurse_id=n.id))
 
+    # --- 100%-hours floor reachability (hard weekend_floor) -----------------
+    # Every worker must reach cfg.weekend_floor hours of 100% (weekend/holiday)
+    # work; a weekend/holiday day supplies at most 12h, so she needs at least
+    # ceil(floor/12) of them available. Flag it up front instead of failing opaque.
+    if cfg.weekend_floor:
+        offdays = [d for d in dates if cal.is_offday(d, holidays)]
+        for n in workers:
+            avail = sum(1 for d in offdays if d not in inp.unavailable_of(n.id, holidays))
+            if avail * 12 < cfg.weekend_floor:
+                issues.append(Issue("error", "weekend_floor_unreachable",
+                                    f"{n.name}: are nevoie de minim {cfg.weekend_floor}h la 100% "
+                                    f"(weekend/sărbători), dar are doar {avail} zi(le) de "
+                                    f"weekend/sărbătoare disponibile (maxim {avail * 12}h). Redu "
+                                    f"concediul sau scoate-o de pe grafic.", nurse_id=n.id))
+
     # --- head nurse arithmetic ----------------------------------------------
     for h in heads:
         total = 8 * wd  # worked on working days + 8h credit per Co day == 8 x wd always

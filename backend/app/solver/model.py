@@ -21,6 +21,11 @@ from .prechecks import (REQUEST_SHIFT, effective_requests,
 from .validator import NurseTotals, compute_totals
 
 HOURS_UB = 40 * 31  # loose upper bound for hour IntVars
+# Penalty for breaking a hard staffing floor (the 24h 100%-hours minimum, the
+# infirmiere run cap): far above every soft weight, so the solver only ever leaves
+# one unmet when it is genuinely unavoidable - and the validator then blocks
+# approval instead of the run failing opaquely as INFEASIBLE.
+W_HARD = 100_000
 
 
 @dataclass
@@ -303,6 +308,7 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
 
     # --- hours: buckets, weekend rule, target deviation ------------------------
     normal_of, weekend_of, absowed = {}, {}, {}
+    weekend_floor_slack = []
     for n in workers:
         n_terms, w_terms = [], []
         for di, day in enumerate(dates):
@@ -324,6 +330,12 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
         m.Add(weekend == sum(w_terms))
         m.Add(weekend <= normal)  # worked hours only: Co credit is NOT in these sums (decided)
         normal_of[n.id], weekend_of[n.id] = normal, weekend
+        if cfg.weekend_floor:
+            # hard floor of 100% (weekend/holiday) hours; the head is not a worker,
+            # so she is exempt. Slack is W_HARD-penalised, never used when reachable.
+            fl = m.NewIntVar(0, cfg.weekend_floor, f"wfloor_{n.id}")
+            m.Add(weekend + fl >= cfg.weekend_floor)
+            weekend_floor_slack.append(fl)
 
         credit = 8 * len(inp.leave_of(n.id))
         owed = m.NewIntVar(-cfg.band, cfg.band, f"owed_{n.id}")
@@ -355,6 +367,33 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
                 e = m.NewIntVar(0, 2, f"clus_{n.id}_{di}")
                 m.Add(sum(win) <= 5 + e)
                 cluster_exc.append(e)
+
+    # --- infirmiere run cap: no more than max_consec_aide worked days in a row ---
+    # Keep an aide on short 8-Z-N stretches, not 8-8-8-Z-N (hard). Each window of
+    # cap+1 consecutive days holds at most cap worked days; windows at the start
+    # count the previous month's worked tail so a run cannot cross the boundary.
+    # W_HARD-penalised slack, so an impossible month fails via the validator, not
+    # opaquely.
+    aide_run_slack = []
+    if is_aide and cfg.max_consec_aide:
+        cap = cfg.max_consec_aide
+        for n in workers:
+            tail = inp.prev_tail.get(n.id, {})
+            tail_worked = {-1: 1 if tail.get(first - dt.timedelta(days=1)) else 0,
+                           -2: 1 if tail.get(first - dt.timedelta(days=2)) else 0}
+            for start in range(-2, D - cap):
+                terms, const = [], 0
+                for j in range(cap + 1):
+                    di = start + j
+                    if di < 0:
+                        const += tail_worked.get(di, 0)
+                    else:
+                        terms.extend(day_vars(n.id, di))
+                if not terms:
+                    continue
+                sl = m.NewIntVar(0, cap + 1, f"aiderun_{n.id}_{start}")
+                m.Add(sum(terms) + const <= cap + sl)
+                aide_run_slack.append(sl)
 
     # --- fairness spreads ----------------------------------------------------------
     objective_terms = []
@@ -396,6 +435,10 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
         objective_terms.append(cfg.w_eight_swap * sum(swap_terms))
     if rest48_exc:
         objective_terms.append(cfg.w_rest48 * sum(rest48_exc))
+    if weekend_floor_slack:
+        objective_terms.append(W_HARD * sum(weekend_floor_slack))
+    if aide_run_slack:
+        objective_terms.append(W_HARD * sum(aide_run_slack))
     m.Minimize(sum(objective_terms))
 
     solver = cp_model.CpSolver()

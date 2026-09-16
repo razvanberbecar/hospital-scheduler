@@ -323,6 +323,34 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
                 W(Issue("warning", "nights_relaxed",
                         f"{n.name}: minimul de nopți relaxat la {minimum} din cauza concediului; are {t.nights}.",
                         nurse_id=n.id))
+            if cfg.weekend_floor and t.worked_weekend < cfg.weekend_floor:
+                V(Issue("violation", "weekend_floor",
+                        f"{n.name}: doar {t.worked_weekend}h la 100% (weekend/sărbători); minimul "
+                        f"lunar este {cfg.weekend_floor}h pentru fiecare asistentă/infirmieră.",
+                        nurse_id=n.id))
+
+    # --- infirmiere run cap: no run of worked days longer than max_consec_aide ---
+    # Walks each aide's worked days from two days before the month (prev tail) to
+    # its last day; a run of more than the cap is flagged once, where it first
+    # exceeds it. Co and off days reset the run.
+    if is_aide and cfg.max_consec_aide:
+        cap = cfg.max_consec_aide
+        for n in inp.nurses:
+            if n.is_head:
+                continue
+            run = 0
+            day = dates[0] - dt.timedelta(days=2)
+            while day <= dates[-1]:
+                if shift_on(n.id, day) is not None:
+                    run += 1
+                    if run == cap + 1:
+                        V(Issue("violation", "aide_run",
+                                f"{n.name}: lucrează peste {cap} zile consecutiv (până pe {day}); "
+                                f"infirmierele se țin pe ture scurte 8-Z-N, nu 8-8-8-Z-N.",
+                                nurse_id=n.id, date=day))
+                else:
+                    run = 0
+                day += dt.timedelta(days=1)
 
     # --- shift requests ----------------------------------------------------------
     kept_requests, _ = effective_requests(inp)

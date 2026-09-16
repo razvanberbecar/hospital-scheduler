@@ -94,6 +94,13 @@ class Config:
     extra_night_cap: int = 2
     band: int = 12                # max |target deviation| the solver may leave per nurse
     min_nights: int = 3           # per non-head nurse, relaxed only when leave makes it impossible
+    # Every rostered non-head nurse must reach this many 100% (weekend/holiday)
+    # hours - hard (decided 2026-09-16). The head works only 8h weekday shifts and
+    # is exempt; prechecks reject a roster whose available weekends cannot supply it.
+    weekend_floor: int = 24
+    # Infirmiere only: hard ceiling on consecutive working days (decided
+    # 2026-09-16), so an aide runs short 8-Z-N stretches, never 8-8-8-Z-N.
+    max_consec_aide: int = 4
     seed: int = 42
     max_time_s: float = 30.0
     workers: int = 8
