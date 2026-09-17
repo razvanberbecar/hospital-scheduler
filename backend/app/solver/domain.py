@@ -99,8 +99,8 @@ class Config:
     # is exempt; prechecks reject a roster whose available weekends cannot supply it.
     weekend_floor: int = 24
     # Infirmiere only: hard ceiling on consecutive working days (decided
-    # 2026-09-16), so an aide runs short 8-Z-N stretches, never 8-8-8-Z-N.
-    max_consec_aide: int = 4
+    # 2026-09-17), so an aide runs short 8-Z-N stretches (3 days), never 8-8-Z-N.
+    max_consec_aide: int = 3
     seed: int = 42
     max_time_s: float = 30.0
     workers: int = 8

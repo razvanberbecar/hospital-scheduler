@@ -2,8 +2,8 @@
 
 - every rostered non-head nurse must reach Config.weekend_floor (24h) of 100%
   (weekend/holiday) hours, both asistente and infirmiere;
-- an infirmiera may work at most Config.max_consec_aide (4) days in a row, so she
-  runs short 8-Z-N stretches, not 8-8-8-Z-N.
+- an infirmiera may work at most Config.max_consec_aide (3) days in a row, so she
+  runs short 8-Z-N stretches, not 8-8-Z-N.
 
 The solver keeps both; the validator blocks approval when either is broken; a
 precheck rejects a roster whose weekends cannot supply 24h up front.
@@ -72,10 +72,16 @@ def test_validator_flags_five_consecutive_worked_days():
     assert "aide_run" in codes_for(validate(inp, five), 1)
 
 
-def test_validator_allows_four_consecutive_worked_days():
+def test_validator_flags_four_consecutive_worked_days():
     inp = ScheduleInput(2026, 10, 176, aides(2), staff_type=STAFF_AIDE, holidays=H)
-    four = [A(1, DATES[d], Shift.EIGHT) for d in range(4, 8)]  # 4 in a row
-    assert "aide_run" not in codes_for(validate(inp, four), 1)
+    four = [A(1, DATES[d], Shift.EIGHT) for d in range(4, 8)]  # 4 in a row > cap 3
+    assert "aide_run" in codes_for(validate(inp, four), 1)
+
+
+def test_validator_allows_three_consecutive_worked_days():
+    inp = ScheduleInput(2026, 10, 176, aides(2), staff_type=STAFF_AIDE, holidays=H)
+    three = [A(1, DATES[d], Shift.EIGHT) for d in range(4, 7)]  # 3 in a row = cap
+    assert "aide_run" not in codes_for(validate(inp, three), 1)
 
 
 def test_run_cap_counts_the_previous_month_tail():

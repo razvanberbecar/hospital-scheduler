@@ -346,7 +346,7 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
                     if run == cap + 1:
                         V(Issue("violation", "aide_run",
                                 f"{n.name}: lucrează peste {cap} zile consecutiv (până pe {day}); "
-                                f"infirmierele se țin pe ture scurte 8-Z-N, nu 8-8-8-Z-N.",
+                                f"infirmierele se țin pe ture scurte 8-Z-N, nu 8-8-Z-N.",
                                 nurse_id=n.id, date=day))
                 else:
                     run = 0

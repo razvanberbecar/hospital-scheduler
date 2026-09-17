@@ -369,7 +369,7 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
                 cluster_exc.append(e)
 
     # --- infirmiere run cap: no more than max_consec_aide worked days in a row ---
-    # Keep an aide on short 8-Z-N stretches, not 8-8-8-Z-N (hard). Each window of
+    # Keep an aide on short 8-Z-N stretches, not 8-8-Z-N (hard). Each window of
     # cap+1 consecutive days holds at most cap worked days; windows at the start
     # count the previous month's worked tail so a run cannot cross the boundary.
     # W_HARD-penalised slack, so an impossible month fails via the validator, not
