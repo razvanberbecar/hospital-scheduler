@@ -1,10 +1,11 @@
-"""Co reduces the 100%-bonus (weekend/holiday) hours - the "Ore 100%" column.
+"""Co lowers the 100%-bonus (weekend/holiday) hours - the "Ore 100%" column -
+but only a little.
 
-Decided 2026-09-16: staff who were on leave should carry fewer weekend/holiday
-hours than colleagues who worked the whole month. Config.w_weekend_leave charges
-each nurse's weekend hours in proportion to her Co days, so the solver moves those
-bonus hours onto full-month staff. With the weight at 0 the solver just equalises
-them (the old behaviour), which is why a leave-free month is unaffected.
+Decided 2026-09-17: the 100% hours are shared in proportion to how much of the
+month each nurse is actually available (Config.w_weekend_fair), so a nurse on Co
+carries fewer than a full-month colleague, graded by how much leave she took, and
+NOT collapsed to the 24h floor. A leave-free month is unaffected (all shares
+equal, i.e. spread evenly).
 """
 from __future__ import annotations
 
@@ -16,37 +17,45 @@ from app.solver.validator import validate
 H = cal.default_holidays(2026, 10)
 WD = [d for d in cal.month_dates(2026, 10) if not cal.is_offday(d, H)]  # 22 weekdays
 
+# ids 1,3,6,7 on Co (5, 8, 9, 7 days, echoing the real October sheet); 2,4,5 work
+# the whole month.
+LEAVE = {1: set(WD[0:5]), 3: set(WD[5:13]), 6: set(WD[13:22]), 7: set(WD[9:16])}
+CO_IDS, NOCO_IDS = [1, 3, 6, 7], [2, 4, 5]
+
 
 def aides(n: int) -> list[Nurse]:
     return [Nurse(i, f"Inf{i}", section="") for i in range(1, n + 1)]
 
 
-def solve_oct(w_weekend_leave: int):
-    # id 1 takes a long Co block; ids 2..7 work the whole month. October norm is
-    # 176 (22 x 8), so the target carries no overtime - this isolates the weekend
-    # split. workers=1 keeps the solve reproducible (seed alone is not enough).
-    cfg = Config(seed=7, max_time_s=45.0, workers=1, w_weekend_leave=w_weekend_leave)
+def solve_oct(leave):
+    cfg = Config(seed=7, max_time_s=45.0, workers=8)  # default w_weekend_fair
     inp = ScheduleInput(2026, 10, 176, aides(7), staff_type=STAFF_AIDE,
-                        leave={1: set(WD[:12])}, holidays=H, config=cfg)
+                        leave=leave, holidays=H, config=cfg)
     res = solve(inp)
     assert res.ok, (res.status, res.diagnosis, [i.message for i in res.prechecks])
     assert validate(inp, res.assignments).ok
-    return res
+    return {i: res.totals[i].worked_weekend for i in range(1, 8)}
 
 
-def test_leave_nurse_carries_the_fewest_weekend_hours():
-    res = solve_oct(20)  # rule on
-    lead = res.totals[1].worked_weekend            # 12 Co days
-    others = [res.totals[i].worked_weekend for i in range(2, 8)]  # full month
-    assert lead < min(others), (lead, others)
-    # the rule only redistributes weekend hours; every target is still met.
-    for i in range(1, 8):
-        assert abs(res.totals[i].owed) <= 20  # cfg.band default is 12; generous here
+def test_leave_lowers_weekend_hours_but_stays_moderate():
+    w = solve_oct(LEAVE)
+    co = [w[i] for i in CO_IDS]
+    noco = [w[i] for i in NOCO_IDS]
+    # Co nurses carry fewer 100% hours than full-month nurses...
+    assert max(co) <= min(noco), (co, noco)
+    # ...but are not collapsed to the 24h floor - the gap is moderate, not the old
+    # bang-bang floor-vs-rest (which was 24 vs 66, a gap of 42).
+    assert min(co) >= 28, co
+    assert max(noco) - min(co) <= 32, (noco, co)
 
 
-def test_off_switch_restores_even_weekend_hours():
-    # With the weight at 0 the leave nurse is no longer singled out: the solver
-    # equalises weekend hours, so she is no longer strictly the lowest.
-    off = solve_oct(0)
-    on = solve_oct(20)
-    assert on.totals[1].worked_weekend < off.totals[1].worked_weekend
+def test_more_leave_is_never_more_weekend_hours():
+    w = solve_oct(LEAVE)
+    # id 6 has the most Co (9 days), id 1 the least among leave-takers (5).
+    assert w[6] <= w[1], (w[6], w[1])
+
+
+def test_leave_free_month_shares_weekend_evenly():
+    w = solve_oct({})
+    vals = list(w.values())
+    assert max(vals) - min(vals) <= 14, vals  # equal shares -> spread evenly

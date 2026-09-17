@@ -399,7 +399,6 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
     objective_terms = []
     spread_specs = []
     if len(workers) >= 2:
-        spread_specs.append((cfg.w_wspread, [weekend_of[n.id] for n in workers], "wknd"))
         unrelaxed = [nights_of[n.id] for n in workers if not night_min[n.id][1]]
         if len(unrelaxed) >= 2:
             spread_specs.append((cfg.w_nspread, unrelaxed, "nights"))
@@ -412,16 +411,30 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
         m.AddMinEquality(lo, exprs)
         objective_terms.append(weight * (hi - lo))
 
+    # --- weekend/holiday ("Ore 100%") fairness, scaled to presence ---------------
+    # Each nurse's share of the 100%-bonus hours tracks how much of the month she
+    # is available, so a nurse on Co carries a little fewer than a full-month
+    # colleague - graded, not the old all-equal-or-floor-vs-rest. Shares are scaled
+    # to a fixed base of 100 so the weight is roster-independent; the deviation
+    # from the fair share is penalised (L1), which - unlike a max-min spread -
+    # holds each nurse near her own target instead of forcing the extremes.
+    if len(workers) >= 2 and cfg.w_weekend_fair:
+        avail = {n.id: D - len(inp.unavailable_of(n.id, holidays)) for n in workers}
+        tot_avail = sum(avail.values()) or 1
+        share = {nid: max(1, round(100 * a / tot_avail)) for nid, a in avail.items()}
+        S = sum(share.values())
+        wtot = m.NewIntVar(0, HOURS_UB, "wknd_total")
+        m.Add(wtot == sum(weekend_of[n.id] for n in workers))
+        for n in workers:
+            # fair share = wtot * share/S; penalise |S*weekend - share*wtot|
+            g = m.NewIntVar(-S * HOURS_UB, S * HOURS_UB, f"wfair_{n.id}")
+            m.Add(g == S * weekend_of[n.id] - share[n.id] * wtot)
+            ag = m.NewIntVar(0, S * HOURS_UB, f"wfairabs_{n.id}")
+            m.AddAbsEquality(ag, g)
+            objective_terms.append(cfg.w_weekend_fair * ag)
+
     # --- objective ------------------------------------------------------------------
     objective_terms.append(cfg.w_dev * sum(absowed.values()))
-    # Weekend/holiday ("Ore 100%") fairness vs leave: charge each nurse's weekend
-    # hours in proportion to her Co days, so the solver moves those bonus hours to
-    # staff who worked the whole month. w_wspread above still equalises the raw
-    # spread, so a vacationer's hours ease down instead of collapsing to zero.
-    leave_days = {n.id: len(inp.leave_of(n.id)) for n in workers}
-    if cfg.w_weekend_leave and any(leave_days.values()):
-        objective_terms.append(cfg.w_weekend_leave *
-                               sum(leave_days[n.id] * weekend_of[n.id] for n in workers))
     if request_pen_terms:
         objective_terms.append(cfg.w_request * sum(request_pen_terms))
     all_tops = list(t4.values()) + list(t8.values())

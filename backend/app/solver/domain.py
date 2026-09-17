@@ -108,15 +108,17 @@ class Config:
     w_dev: int = 1_000            # per hour of |target deviation|
     w_request: int = 500          # per denied request (below targets, above top-ups)
     w_topup: int = 300            # per top-up used
-    w_wspread: int = 50           # weekend-hours spread across nurses
-    # Per weekend/holiday hour, times the nurse's Co days: pushes the 100%-bonus
-    # hours (the "Ore 100%" column) off staff who were on leave and onto those who
-    # worked the whole month, so a vacationer carries fewer of them (decided
-    # 2026-09-16). Zero for anyone without Co, so it never touches a leave-free
-    # month. Kept well under w_dev (1000/hour): it only redistributes weekend
-    # hours between nurses, never at the cost of an hour target - and w_wspread
-    # still keeps the drop graduated instead of dumping a vacationer to zero.
-    w_weekend_leave: int = 20
+    # The 100%-bonus (weekend/holiday) hours are shared in proportion to how much
+    # of the month each nurse is actually available, so a nurse on Co carries a
+    # little fewer than a colleague who worked the whole month - graded, not
+    # equalised and not collapsed to the floor (decided 2026-09-17, replacing the
+    # old equalise + leave-push that was bang-bang: all-equal or floor-vs-rest).
+    # With nobody on leave every share is equal - the old "spread evenly". The
+    # penalty is on a presence-scaled deviation (~100x hours), so this small
+    # weight already reads as ~100/hour of deviation: above the minor spreads,
+    # but kept below w_rest48/w_dev so weekend fairness never buys a bent rest day
+    # or a missed hour target.
+    w_weekend_fair: int = 1
     w_nspread: int = 30           # night-count spread across nurses
     w_kitchen_run: int = 20       # >3 consecutive kitchen days
     w_cluster: int = 20           # >5 working days in any 7-day window
