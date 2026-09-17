@@ -119,6 +119,12 @@ class Config:
     # but kept below w_rest48/w_dev so weekend fairness never buys a bent rest day
     # or a missed hour target.
     w_weekend_fair: int = 1
+    # Infirmiere only: balances the daily 8h slot across aides the same way -
+    # each aide's 8h-shift count is pulled toward a share proportional to how much
+    # of the month she is available, so one aide does not collect 10 eights while
+    # another gets 1 (decided 2026-09-17). Small and below w_dev, so the hour
+    # target (which naturally keeps heavy-Co aides on 12h shifts) still wins.
+    w_eight_fair: int = 1
     w_nspread: int = 30           # night-count spread across nurses
     w_kitchen_run: int = 20       # >3 consecutive kitchen days
     w_cluster: int = 20           # >5 working days in any 7-day window

@@ -433,6 +433,32 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
             m.AddAbsEquality(ag, g)
             objective_terms.append(cfg.w_weekend_fair * ag)
 
+    # --- infirmiere: balance the daily 8h slot across aides, scaled to presence --
+    # Same presence-proportional fair share, on the COUNT of 8h shifts, so the
+    # every-day 8h slot is not piled onto one aide (10 eights) while another gets 1.
+    # The hour target still dominates, so a heavy-Co aide stays on 12h shifts rather
+    # than being handed eights she cannot afford within her hours.
+    if is_aide and len(workers) >= 2 and cfg.w_eight_fair:
+        avail = {n.id: D - len(inp.unavailable_of(n.id, holidays)) for n in workers}
+        tot_avail = sum(avail.values()) or 1
+        share = {nid: max(1, round(100 * a / tot_avail)) for nid, a in avail.items()}
+        S = sum(share.values())
+        eight_of = {}
+        for n in workers:
+            ev = [x[k] for di in range(D) if (k := (n.id, di, Shift.EIGHT)) in x]
+            ec = m.NewIntVar(0, D, f"ecnt_{n.id}")
+            m.Add(ec == sum(ev))
+            eight_of[n.id] = ec
+        etot = m.NewIntVar(0, D, "eight_total")
+        m.Add(etot == sum(eight_of[n.id] for n in workers))
+        for n in workers:
+            # fair share = etot * share/S; penalise |S*eights - share*etot|
+            g = m.NewIntVar(-S * D, S * D, f"efair_{n.id}")
+            m.Add(g == S * eight_of[n.id] - share[n.id] * etot)
+            ag = m.NewIntVar(0, S * D, f"efairabs_{n.id}")
+            m.AddAbsEquality(ag, g)
+            objective_terms.append(cfg.w_eight_fair * ag)
+
     # --- objective ------------------------------------------------------------------
     objective_terms.append(cfg.w_dev * sum(absowed.values()))
     if request_pen_terms:
