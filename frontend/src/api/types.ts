@@ -267,6 +267,7 @@ export interface SnapshotAssignment {
 export interface ApprovalSnapshot {
   assignments: SnapshotAssignment[];
   totals: Record<string, SnapshotTotals>; // string user ids
+  overridden_violations?: IssueOut[]; // present (possibly empty) on force-approved months
 }
 
 export interface ApprovalSnapshotOut {

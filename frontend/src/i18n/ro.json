@@ -148,6 +148,8 @@
     "approveConfirmTitle": "Aprobi graficul?",
     "approveConfirmBody": "Graficul devine oficial; luna precedentă aprobată se blochează definitiv.",
     "approveWarnCount": "Atenție: {{count}} avertismente.",
+    "approveAnywayHint": "Poți aproba totuși: aprobarea este necesară pentru ca luna următoare să preia ultimele zile ale acestei luni.",
+    "approveAnyway": "Aprobă oricum",
     "solverStatus": "Stare generator",
     "objective": "Obiectiv",
     "relaxedNights": "Nopți relaxate",

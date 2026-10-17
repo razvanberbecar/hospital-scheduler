@@ -517,12 +517,12 @@ function ActionBar({
     }
   }
 
-  async function onApprove() {
+  async function onApprove(force = false) {
     setConfirmApprove(false);
     setApproveErr(null);
     setApproveMsg("");
     try {
-      const res = await approveSchedule(detail.id);
+      const res = await approveSchedule(detail.id, force);
       setApproveMsg(t("detail.approvedVersion", { version: res.version }));
       await onReload();
     } catch (e) {
@@ -629,6 +629,10 @@ function ActionBar({
             <>
               <p>{approveErr.message}</p>
               <IssueList issues={approveErr.violations} roster={roster} kind="violation" />
+              <p className="hint">{t("detail.approveAnywayHint")}</p>
+              <button type="button" className="danger" onClick={() => onApprove(true)}>
+                {t("detail.approveAnyway")}
+              </button>
             </>
           )}
         </Banner>
@@ -644,7 +648,7 @@ function ActionBar({
             ) : undefined
           }
           confirmLabel={t("detail.approve")}
-          onConfirm={onApprove}
+          onConfirm={() => onApprove(false)}
           onCancel={() => setConfirmApprove(false)}
         />
       )}
