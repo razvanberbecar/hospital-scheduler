@@ -67,6 +67,25 @@ def test_infirmiere_no_swap_days_when_unconstrained(july_aides):
     assert len({a.date for a in eight}) == 31
 
 
+def test_infirmiere_eight_shifts_are_balanced_across_aides():
+    """The every-day 8h slot is spread across aides (w_eight_fair), not piled onto
+    one: over an October with mixed Co, the busiest and quietest aide's 8h counts
+    differ by only a few - without the term one aide collected 10 while another had 1."""
+    from collections import Counter
+    holidays = cal.default_holidays(2026, 10)
+    wd = [d for d in cal.month_dates(2026, 10) if not cal.is_offday(d, holidays)]
+    leave = {1: set(wd[0:5]), 3: set(wd[5:13]), 6: set(wd[13:22]), 7: set(wd[9:16])}
+    roster = aides(7)
+    inp = ScheduleInput(2026, 10, 176, roster, staff_type=STAFF_AIDE, leave=leave,
+                        holidays=holidays, config=Config(seed=7, max_time_s=60.0, workers=8))
+    res = solve(inp)
+    assert res.ok, (res.status, res.diagnosis, [i.message for i in res.prechecks])
+    assert validate(inp, res.assignments).ok
+    eights = Counter(a.nurse_id for a in res.assignments if a.shift is Shift.EIGHT)
+    counts = [eights.get(n.id, 0) for n in roster]
+    assert max(counts) - min(counts) <= 4, counts
+
+
 def test_infirmiere_nights_min_and_band(july_aides):
     inp, res = july_aides
     for nid, t in res.totals.items():

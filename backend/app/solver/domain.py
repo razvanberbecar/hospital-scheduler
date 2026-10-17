@@ -6,8 +6,10 @@ Terminology follows the planning document (Hospital_Scheduling_Plan.docx v0.5):
   8 (infirmiere 8h day slot). Clock times differ by staff type - asistente work
   07-19/19-07, infirmiere 06-18/18-06 - see NIGHT_SPLIT.
 
-Months no longer carry any hour debt: every month stands alone and each nurse
-simply aims for the schedule's base target. The signed distance to that target
+Months no longer carry any hour debt: every month stands alone. Each nurse aims
+for the schedule's base target, less a slice of its overtime for every Co day she
+takes (see ScheduleInput.effective_target), so a nurse on leave does less overtime
+than one who worked the whole month. The signed distance to that target
 (owed = total - target) is still reported and, beyond Config.band, blocks
 approval - but nothing rolls into the next month.
 """
@@ -92,6 +94,13 @@ class Config:
     extra_night_cap: int = 2
     band: int = 12                # max |target deviation| the solver may leave per nurse
     min_nights: int = 3           # per non-head nurse, relaxed only when leave makes it impossible
+    # Every rostered non-head nurse must reach this many 100% (weekend/holiday)
+    # hours - hard (decided 2026-09-16). The head works only 8h weekday shifts and
+    # is exempt; prechecks reject a roster whose available weekends cannot supply it.
+    weekend_floor: int = 24
+    # Infirmiere only: hard ceiling on consecutive working days (decided
+    # 2026-09-17), so an aide runs short 8-Z-N stretches (3 days), never 8-8-Z-N.
+    max_consec_aide: int = 3
     seed: int = 42
     max_time_s: float = 30.0
     workers: int = 8
@@ -99,7 +108,23 @@ class Config:
     w_dev: int = 1_000            # per hour of |target deviation|
     w_request: int = 500          # per denied request (below targets, above top-ups)
     w_topup: int = 300            # per top-up used
-    w_wspread: int = 50           # weekend-hours spread across nurses
+    # The 100%-bonus (weekend/holiday) hours are shared in proportion to how much
+    # of the month each nurse is actually available, so a nurse on Co carries a
+    # little fewer than a colleague who worked the whole month - graded, not
+    # equalised and not collapsed to the floor (decided 2026-09-17, replacing the
+    # old equalise + leave-push that was bang-bang: all-equal or floor-vs-rest).
+    # With nobody on leave every share is equal - the old "spread evenly". The
+    # penalty is on a presence-scaled deviation (~100x hours), so this small
+    # weight already reads as ~100/hour of deviation: above the minor spreads,
+    # but kept below w_rest48/w_dev so weekend fairness never buys a bent rest day
+    # or a missed hour target.
+    w_weekend_fair: int = 1
+    # Infirmiere only: balances the daily 8h slot across aides the same way -
+    # each aide's 8h-shift count is pulled toward a share proportional to how much
+    # of the month she is available, so one aide does not collect 10 eights while
+    # another gets 1 (decided 2026-09-17). Small and below w_dev, so the hour
+    # target (which naturally keeps heavy-Co aides on 12h shifts) still wins.
+    w_eight_fair: int = 1
     w_nspread: int = 30           # night-count spread across nurses
     w_kitchen_run: int = 20       # >3 consecutive kitchen days
     w_cluster: int = 20           # >5 working days in any 7-day window
@@ -115,6 +140,18 @@ class Config:
     # capacity) is chosen only when it saves >=2h of total deviation or coverage
     # is otherwise infeasible from leave.
     w_eight_swap: int = 2000
+    # Asistente only: cost per day+section where a section has no night nurse (the
+    # 2+0 / 0+2 split). Nights are exactly 2/day and 1+1 across the two sections is
+    # the norm; this makes the solver keep 1+1 unless the imbalance is needed to
+    # hit hour targets or cover leave. DELIBERATELY below w_dev (1000/hour): an
+    # hour target must never be missed just to preserve 1+1, so a 2+0 day is taken
+    # whenever it strictly helps the hours, and 1+1 wins only when target-neutral.
+    # No 4th-day penalty: with nights fixed at 2, everyone reaching the monthly
+    # target forces a 4th day shift on ~2/3 of days, so a penalty could not reduce
+    # it (measured) and only muddied the objective, leaving the solver stuck on
+    # costlier feasible solutions (gratuitous 48h-rest exceptions). The day cap
+    # stays a hard 4; the day shift simply carries the surplus the nights no longer do.
+    w_night_section: int = 600
 
 
 @dataclass
@@ -132,9 +169,29 @@ class ScheduleInput:
     locks: list[Assignment] = field(default_factory=list)  # cells pinned before solving (M3 editor)
 
     def effective_target(self, nurse_id: int) -> int:
-        """The target every nurse aims for. Months no longer carry hour debt, so
-        this is simply the schedule's base target for everyone."""
-        return self.base_target
+        """The hour target this nurse aims for.
+
+        A nurse with Co (concediu) does less overtime than a colleague who works
+        the whole month (decided 2026-09-15): the overtime portion - the part of
+        base_target above the month's working-days norm (working_days x 8) - is
+        scaled down in proportion to her Co days, so every Co day sheds a slice of
+        it and a full month of Co removes it entirely. A nurse with no Co keeps
+        the full base_target, so vacationers never carry the same overtime as the
+        ones who worked all month. When base_target is at or below the norm there
+        is no overtime to scale and everyone keeps base_target. Months carry no
+        hour debt - each stands alone, nothing rolls into the next.
+        """
+        from . import calendar as cal  # local: calendar imports domain
+        co_days = len(self.leave_of(nurse_id))
+        if co_days == 0:
+            return self.base_target
+        holidays = self.holidays if self.holidays is not None \
+            else cal.default_holidays(self.year, self.month)
+        wd = cal.working_days(self.year, self.month, holidays)
+        overtime = self.base_target - wd * 8
+        if overtime <= 0:
+            return self.base_target
+        return self.base_target - round(overtime * co_days / wd)
 
     def leave_of(self, nurse_id: int) -> set[dt.date]:
         return self.leave.get(nurse_id, set())

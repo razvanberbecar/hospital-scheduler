@@ -118,39 +118,38 @@ def test_whole_section_on_leave_one_day_is_an_error():
 D8, D9, D10 = dt.date(2026, 7, 8), dt.date(2026, 7, 9), dt.date(2026, 7, 10)
 
 
-def test_lone_available_nurse_in_a_section_is_a_crunch_error():
-    """One available nurse on a day cannot field the section's Z+N pair."""
-    leave = {nid: {D8} for nid in (1, 2, 3, 4, 5, 6)}  # 6 of 7 BIG on Co
+def test_single_lone_available_day_is_not_a_crunch():
+    """One available nurse on a single day still fields the section's Z; the two
+    nights may both come from the other section (2+0), so it is not a crunch."""
+    leave = {nid: {D8} for nid in (1, 2, 3, 4, 5, 6)}  # 6 of 7 BIG on Co, one day
     inp = ScheduleInput(2026, 7, 184, DEMO_NURSES, leave=leave)
-    assert "section_leave_crunch" in codes(run_prechecks(inp), "error")
+    assert "section_leave_crunch" not in codes(run_prechecks(inp), "error")
 
 
-def test_two_available_over_two_days_is_a_crunch_error():
-    """Two people cannot cover Z+N on two consecutive days (a night blocks the
-    next day), even though each single day has two available."""
+def test_two_available_over_two_days_is_not_a_crunch():
+    """Two nurses cover two consecutive day shifts (they alternate, since a Z
+    cannot follow a Z); nights are pool-wide now, so this no longer blocks."""
     leave = {nid: {D8, D9} for nid in (1, 2, 3, 4, 5)}  # 5 of 7 BIG -> 2 available
     issues = run_prechecks(ScheduleInput(2026, 7, 184, DEMO_NURSES, leave=leave))
-    assert "section_leave_crunch" in codes(issues, "error")
-    assert any(i.code == "section_leave_crunch" and "consecutive" in i.message for i in issues)
-
-
-def test_three_available_over_three_days_is_a_warning_not_an_error():
-    """Three available for three consecutive days solves only by leaning on 48h
-    exceptions -> a warning, not a blocking error."""
-    leave = {nid: {D8, D9, D10} for nid in (1, 2, 3, 4)}  # 4 of 7 BIG -> 3 available
-    issues = run_prechecks(ScheduleInput(2026, 7, 184, DEMO_NURSES, leave=leave))
-    assert "section_leave_warning" in codes(issues, "warning")
     assert "section_leave_crunch" not in codes(issues, "error")
 
 
-def test_locked_head_counts_as_available_for_the_crunch():
-    """A locked head Z/N is +1 available for the section that day, so the manager's
-    head-cover workaround is not falsely reported as a crunch (lock-aware)."""
-    leave = {nid: {D8} for nid in (8, 9, 10, 12, 13)}  # 5 of 6 SMALL workers on Co
+def test_lone_nurse_over_two_consecutive_days_is_a_crunch_error():
+    """One available nurse cannot cover two consecutive day shifts - a Z cannot
+    follow a Z, so the section's Z on the second day is unfillable."""
+    leave = {nid: {D8, D9} for nid in (1, 2, 3, 4, 5, 6)}  # 6 of 7 BIG -> 1 available both days
+    issues = run_prechecks(ScheduleInput(2026, 7, 184, DEMO_NURSES, leave=leave))
+    assert "section_leave_crunch" in codes(issues, "error")
+
+
+def test_locked_head_day_rescues_a_consecutive_day_crunch():
+    """A locked head Z is +1 available for her section's day shift, so it breaks
+    an otherwise lone-nurse consecutive-day crunch (lock-aware)."""
+    leave = {nid: {D8, D9} for nid in (8, 9, 10, 12, 13)}  # 5 of 6 SMALL workers -> 1 available both days
     inp = ScheduleInput(2026, 7, 184, DEMO_NURSES, leave=leave)
     assert "section_leave_crunch" in codes(run_prechecks(inp), "error")
     locked = ScheduleInput(2026, 7, 184, DEMO_NURSES, leave=leave,
-                           locks=[Assignment(11, D8, Shift.DAY, 12, 12, 0)])  # head Z
+                           locks=[Assignment(11, D8, Shift.DAY, 12, 12, 0)])  # head Z on D8
     assert "section_leave_crunch" not in codes(run_prechecks(locked), "error")
 
 

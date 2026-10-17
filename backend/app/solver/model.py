@@ -21,6 +21,11 @@ from .prechecks import (REQUEST_SHIFT, effective_requests,
 from .validator import NurseTotals, compute_totals
 
 HOURS_UB = 40 * 31  # loose upper bound for hour IntVars
+# Penalty for breaking a hard staffing floor (the 24h 100%-hours minimum, the
+# infirmiere run cap): far above every soft weight, so the solver only ever leaves
+# one unmet when it is genuinely unavoidable - and the validator then blocks
+# approval instead of the run failing opaquely as INFEASIBLE.
+W_HARD = 100_000
 
 
 @dataclass
@@ -228,6 +233,7 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
 
     # --- coverage -------------------------------------------------------------
     swap_terms: list[cp_model.IntVar] = []
+    night_section_exc: list[cp_model.IntVar] = []  # asistente 2+0/0+2 nights
     if is_aide:
         # Infirmiere daily coverage (HARD): 1 Z + 1 N + 1 x 8h. The swap exception
         # (penalized) turns the 8h slot into a second Z -> 2 Z + 1 N, used only when
@@ -244,10 +250,12 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
             m.Add(sum(nvars) <= 1 + cfg.extra_night_cap)
             swap_terms.append(swap)
     else:
-        # HARD per-section day/night, exactly one kitchen. Each day must field at
-        # least one Z from each section and one N from each section (that is how
-        # the 2Z and 2N are formed). A locked head Z/N counts as a constant toward
-        # its section's sum. Staffing caps stay TOTAL-based.
+        # Day (Z): one per section is the rule (2/day), but everyone reaching the
+        # monthly target forces 3-4 Z on most days (nights are fixed at 2, so days
+        # carry the surplus), so the cap is a plain hard 4. Night (N): exactly
+        # 2/day total, one per section preferred but the 2+0 / 0+2 split allowed
+        # under penalty (night_section_exc). Exactly one kitchen. A locked head
+        # Z/N/K counts as a constant toward the relevant sum.
         section_of = {n.id: n.section for n in inp.nurses}
         for di, day in enumerate(dates):
             zvars = [x[k] for n in workers if (k := (n.id, di, Shift.DAY)) in x]
@@ -256,19 +264,29 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
             head_a = head_by_day.get(day)
             head_shift = head_a.shift if head_a is not None else None
             head_section = section_of.get(head_a.nurse_id) if head_a is not None else None
-            # total-based caps (head Z/N/K also occupies a slot)
+            # total-based counts (head Z/N/K also occupies a slot)
             head_z = 1 if head_shift is Shift.DAY else 0
             head_n = 1 if head_shift is Shift.NIGHT else 0
             head_k = 1 if head_shift is Shift.KITCHEN else 0
-            m.Add(sum(zvars) + head_z <= 2 + cfg.extra_day_cap)
-            m.Add(sum(nvars) + head_n <= 2 + cfg.extra_night_cap)
+            # exactly two nights and exactly one kitchen every day
+            m.Add(sum(nvars) + head_n == 2)
             m.Add(sum(kvars) + head_k == 1)
-            for slot, shift, head_here in (("day", Shift.DAY, head_z), ("night", Shift.NIGHT, head_n)):
-                for section in (BIG, SMALL):
-                    pool = [x[k] for n in workers
-                            if n.section == section and (k := (n.id, di, shift)) in x]
-                    const = head_here if head_section == section else 0
-                    m.Add(sum(pool) + const >= 1)
+            # day shifts: hard cap 4 (they carry the hours the nights no longer do)
+            m.Add(sum(zvars) + head_z <= 4)
+            # HARD: one Z per section (the 3rd/4th Z land wherever hours need them)
+            for section in (BIG, SMALL):
+                pool = [x[k] for n in workers
+                        if n.section == section and (k := (n.id, di, Shift.DAY)) in x]
+                const = head_z if head_section == section else 0
+                m.Add(sum(pool) + const >= 1)
+            # SOFT: one N per section preferred; pay w_night_section for a 2+0/0+2
+            for section in (BIG, SMALL):
+                pool = [x[k] for n in workers
+                        if n.section == section and (k := (n.id, di, Shift.NIGHT)) in x]
+                const = head_n if head_section == section else 0
+                uncov = m.NewBoolVar(f"nuncov_{section}_{di}")
+                m.Add(sum(pool) + const + uncov >= 1)
+                night_section_exc.append(uncov)
 
     # --- night minimums --------------------------------------------------------
     nights_of: dict[int, cp_model.IntVar] = {}
@@ -303,6 +321,7 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
 
     # --- hours: buckets, weekend rule, target deviation ------------------------
     normal_of, weekend_of, absowed = {}, {}, {}
+    weekend_floor_slack = []
     for n in workers:
         n_terms, w_terms = [], []
         for di, day in enumerate(dates):
@@ -324,6 +343,12 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
         m.Add(weekend == sum(w_terms))
         m.Add(weekend <= normal)  # worked hours only: Co credit is NOT in these sums (decided)
         normal_of[n.id], weekend_of[n.id] = normal, weekend
+        if cfg.weekend_floor:
+            # hard floor of 100% (weekend/holiday) hours; the head is not a worker,
+            # so she is exempt. Slack is W_HARD-penalised, never used when reachable.
+            fl = m.NewIntVar(0, cfg.weekend_floor, f"wfloor_{n.id}")
+            m.Add(weekend + fl >= cfg.weekend_floor)
+            weekend_floor_slack.append(fl)
 
         credit = 8 * len(inp.leave_of(n.id))
         owed = m.NewIntVar(-cfg.band, cfg.band, f"owed_{n.id}")
@@ -356,11 +381,37 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
                 m.Add(sum(win) <= 5 + e)
                 cluster_exc.append(e)
 
+    # --- infirmiere run cap: no more than max_consec_aide worked days in a row ---
+    # Keep an aide on short 8-Z-N stretches, not 8-8-Z-N (hard). Each window of
+    # cap+1 consecutive days holds at most cap worked days; windows at the start
+    # count the previous month's worked tail so a run cannot cross the boundary.
+    # W_HARD-penalised slack, so an impossible month fails via the validator, not
+    # opaquely.
+    aide_run_slack = []
+    if is_aide and cfg.max_consec_aide:
+        cap = cfg.max_consec_aide
+        for n in workers:
+            tail = inp.prev_tail.get(n.id, {})
+            tail_worked = {-1: 1 if tail.get(first - dt.timedelta(days=1)) else 0,
+                           -2: 1 if tail.get(first - dt.timedelta(days=2)) else 0}
+            for start in range(-2, D - cap):
+                terms, const = [], 0
+                for j in range(cap + 1):
+                    di = start + j
+                    if di < 0:
+                        const += tail_worked.get(di, 0)
+                    else:
+                        terms.extend(day_vars(n.id, di))
+                if not terms:
+                    continue
+                sl = m.NewIntVar(0, cap + 1, f"aiderun_{n.id}_{start}")
+                m.Add(sum(terms) + const <= cap + sl)
+                aide_run_slack.append(sl)
+
     # --- fairness spreads ----------------------------------------------------------
     objective_terms = []
     spread_specs = []
     if len(workers) >= 2:
-        spread_specs.append((cfg.w_wspread, [weekend_of[n.id] for n in workers], "wknd"))
         unrelaxed = [nights_of[n.id] for n in workers if not night_min[n.id][1]]
         if len(unrelaxed) >= 2:
             spread_specs.append((cfg.w_nspread, unrelaxed, "nights"))
@@ -372,6 +423,54 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
         m.AddMaxEquality(hi, exprs)
         m.AddMinEquality(lo, exprs)
         objective_terms.append(weight * (hi - lo))
+
+    # --- weekend/holiday ("Ore 100%") fairness, scaled to presence ---------------
+    # Each nurse's share of the 100%-bonus hours tracks how much of the month she
+    # is available, so a nurse on Co carries a little fewer than a full-month
+    # colleague - graded, not the old all-equal-or-floor-vs-rest. Shares are scaled
+    # to a fixed base of 100 so the weight is roster-independent; the deviation
+    # from the fair share is penalised (L1), which - unlike a max-min spread -
+    # holds each nurse near her own target instead of forcing the extremes.
+    if len(workers) >= 2 and cfg.w_weekend_fair:
+        avail = {n.id: D - len(inp.unavailable_of(n.id, holidays)) for n in workers}
+        tot_avail = sum(avail.values()) or 1
+        share = {nid: max(1, round(100 * a / tot_avail)) for nid, a in avail.items()}
+        S = sum(share.values())
+        wtot = m.NewIntVar(0, HOURS_UB, "wknd_total")
+        m.Add(wtot == sum(weekend_of[n.id] for n in workers))
+        for n in workers:
+            # fair share = wtot * share/S; penalise |S*weekend - share*wtot|
+            g = m.NewIntVar(-S * HOURS_UB, S * HOURS_UB, f"wfair_{n.id}")
+            m.Add(g == S * weekend_of[n.id] - share[n.id] * wtot)
+            ag = m.NewIntVar(0, S * HOURS_UB, f"wfairabs_{n.id}")
+            m.AddAbsEquality(ag, g)
+            objective_terms.append(cfg.w_weekend_fair * ag)
+
+    # --- infirmiere: balance the daily 8h slot across aides, scaled to presence --
+    # Same presence-proportional fair share, on the COUNT of 8h shifts, so the
+    # every-day 8h slot is not piled onto one aide (10 eights) while another gets 1.
+    # The hour target still dominates, so a heavy-Co aide stays on 12h shifts rather
+    # than being handed eights she cannot afford within her hours.
+    if is_aide and len(workers) >= 2 and cfg.w_eight_fair:
+        avail = {n.id: D - len(inp.unavailable_of(n.id, holidays)) for n in workers}
+        tot_avail = sum(avail.values()) or 1
+        share = {nid: max(1, round(100 * a / tot_avail)) for nid, a in avail.items()}
+        S = sum(share.values())
+        eight_of = {}
+        for n in workers:
+            ev = [x[k] for di in range(D) if (k := (n.id, di, Shift.EIGHT)) in x]
+            ec = m.NewIntVar(0, D, f"ecnt_{n.id}")
+            m.Add(ec == sum(ev))
+            eight_of[n.id] = ec
+        etot = m.NewIntVar(0, D, "eight_total")
+        m.Add(etot == sum(eight_of[n.id] for n in workers))
+        for n in workers:
+            # fair share = etot * share/S; penalise |S*eights - share*etot|
+            g = m.NewIntVar(-S * D, S * D, f"efair_{n.id}")
+            m.Add(g == S * eight_of[n.id] - share[n.id] * etot)
+            ag = m.NewIntVar(0, S * D, f"efairabs_{n.id}")
+            m.AddAbsEquality(ag, g)
+            objective_terms.append(cfg.w_eight_fair * ag)
 
     # --- objective ------------------------------------------------------------------
     objective_terms.append(cfg.w_dev * sum(absowed.values()))
@@ -386,8 +485,14 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
         objective_terms.append(cfg.w_cluster * sum(cluster_exc))
     if swap_terms:
         objective_terms.append(cfg.w_eight_swap * sum(swap_terms))
+    if night_section_exc:
+        objective_terms.append(cfg.w_night_section * sum(night_section_exc))
     if rest48_exc:
         objective_terms.append(cfg.w_rest48 * sum(rest48_exc))
+    if weekend_floor_slack:
+        objective_terms.append(W_HARD * sum(weekend_floor_slack))
+    if aide_run_slack:
+        objective_terms.append(W_HARD * sum(aide_run_slack))
     m.Minimize(sum(objective_terms))
 
     solver = cp_model.CpSolver()
@@ -536,8 +641,10 @@ def _diagnose(inp: ScheduleInput, holidays: set[dt.date],
                 m.Add(sum(pool) + sl >= 1)
                 slacks.append((day, label, sl, 1))
     else:
-        # A locked head Z/N counts toward its section's sum; a locked head K
-        # toward the kitchen sum (plan 3), so a head-covered day is not flagged.
+        # A locked head Z counts toward its section's day sum, a head N toward the
+        # pool-wide night sum, a head K toward the kitchen sum (plan 3), so a
+        # head-covered day is not flagged. Day coverage is per-section (one Z
+        # each); night coverage is pool-wide (two, from either section).
         section_of = {n.id: n.section for n in inp.nurses}
         for di, day in enumerate(dates):
             head_a = head_by_day.get(day)
@@ -546,15 +653,17 @@ def _diagnose(inp: ScheduleInput, holidays: set[dt.date],
             head_z = 1 if head_shift is Shift.DAY else 0
             head_n = 1 if head_shift is Shift.NIGHT else 0
             head_k = 1 if head_shift is Shift.KITCHEN else 0
-            for label, s, head_here in (("zi", Shift.DAY, head_z),
-                                        ("noapte", Shift.NIGHT, head_n)):
-                for section in (BIG, SMALL):
-                    pool = [x[k] for n in workers
-                            if n.section == section and (k := (n.id, di, s)) in x]
-                    const = head_here if head_section == section else 0
-                    sl = m.NewIntVar(0, 1, f"slack_{label}_{section}_{di}")
-                    m.Add(sum(pool) + const + sl >= 1)
-                    slacks.append((day, f"{label} {SECTION_LABEL[section]}", sl, 1))
+            for section in (BIG, SMALL):
+                pool = [x[k] for n in workers
+                        if n.section == section and (k := (n.id, di, Shift.DAY)) in x]
+                const = head_z if head_section == section else 0
+                sl = m.NewIntVar(0, 1, f"slack_zi_{section}_{di}")
+                m.Add(sum(pool) + const + sl >= 1)
+                slacks.append((day, f"zi {SECTION_LABEL[section]}", sl, 1))
+            npool = [x[k] for n in workers if (k := (n.id, di, Shift.NIGHT)) in x]
+            nsl = m.NewIntVar(0, 2, f"slack_noapte_{di}")
+            m.Add(sum(npool) + head_n + nsl >= 2)
+            slacks.append((day, "noapte", nsl, 2))
             kpool = [x[k] for n in workers if (k := (n.id, di, Shift.KITCHEN)) in x]
             ksl = m.NewIntVar(0, 1, f"slack_kitchen_{di}")
             m.Add(sum(kpool) + head_k + ksl >= 1)

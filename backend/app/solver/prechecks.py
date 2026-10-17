@@ -121,12 +121,13 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
                                     f"Secția {SECTION_LABEL[section]} are doar {len(pool)} asistentă(e) pentru ~{days} ture de "
                                     f"noapte și {days} de zi: încărcare mare."))
 
-        # --- per-section daily feasibility (each section must field a nurse) ---
-        # Every day needs one Z and one N from each section (HARD). If all of a
-        # section's workers are leave-blocked on some day, the model is infeasible;
-        # flag it before burning solver time. A locked head Z/N can cover her own
-        # section, so a section with only the head available is not necessarily
-        # blocked - we only flag when NO nurse of the section is available at all.
+        # --- per-section daily feasibility (each section must field a Z) ---
+        # Every day needs one Z from each section (HARD); the two nights are
+        # pool-wide (either section - the 2+0 / 0+2 split). If all of a section's
+        # workers are leave-blocked on some day, its Z is unfillable and the model
+        # is infeasible; flag it before burning solver time. A locked head Z can
+        # cover her own section, so a section with only the head available is not
+        # necessarily blocked - we only flag when NO nurse is available at all.
         for section in (BIG, SMALL):
             pool = [n for n in inp.nurses if n.section == section]  # incl. head
             if not pool:
@@ -139,8 +140,7 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
                 if not available:
                     issues.append(Issue("error", "section_unavailable",
                                         f"{SECTION_LABEL[section]}: toate asistentele din această secție sunt în concediu "
-                                        f"pe {day}, dar fiecare zi are nevoie de o asistentă de zi și una de noapte din "
-                                        f"secție.", date=day))
+                                        f"pe {day}, dar fiecare zi are nevoie de o asistentă de zi din secție.", date=day))
 
     # --- target sanity ----------------------------------------------------
     if inp.base_target % 4 != 0:
@@ -208,7 +208,9 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
             + 8 * len(workers)
     else:
         floor_hours = 56 * days
-        ceiling_hours = ((2 + cfg.extra_day_cap) * 12 + (2 + cfg.extra_night_cap) * 12 + 8) * days + 8 * len(workers)
+        # asistente day shifts cap at 4 (they carry the surplus), nights at exactly
+        # 2/day, plus the single 8h kitchen; top-ups add <=8h per nurse.
+        ceiling_hours = ((2 + cfg.extra_day_cap) * 12 + 2 * 12 + 8) * days + 8 * len(workers)
     if required_worked < floor_hours:
         issues.append(Issue("error", "supply_low",
                             f"Graficul oferă {required_worked}h de muncă, dar acoperirea minimă costă "
@@ -237,6 +239,21 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
             issues.append(Issue("warning", "nights_relaxed",
                                 f"{n.name}: concediul face imposibil minimul de 3 nopți; relaxat la {minimum} "
                                 f"noapte/nopți și semnalat.", nurse_id=n.id))
+
+    # --- 100%-hours floor reachability (hard weekend_floor) -----------------
+    # Every worker must reach cfg.weekend_floor hours of 100% (weekend/holiday)
+    # work; a weekend/holiday day supplies at most 12h, so she needs at least
+    # ceil(floor/12) of them available. Flag it up front instead of failing opaque.
+    if cfg.weekend_floor:
+        offdays = [d for d in dates if cal.is_offday(d, holidays)]
+        for n in workers:
+            avail = sum(1 for d in offdays if d not in inp.unavailable_of(n.id, holidays))
+            if avail * 12 < cfg.weekend_floor:
+                issues.append(Issue("error", "weekend_floor_unreachable",
+                                    f"{n.name}: are nevoie de minim {cfg.weekend_floor}h la 100% "
+                                    f"(weekend/sărbători), dar are doar {avail} zi(le) de "
+                                    f"weekend/sărbătoare disponibile (maxim {avail * 12}h). Redu "
+                                    f"concediul sau scoate-o de pe grafic.", nurse_id=n.id))
 
     # --- head nurse arithmetic ----------------------------------------------
     for h in heads:
@@ -271,13 +288,14 @@ def _runs(indices: list[int]) -> list[list[int]]:
 def _leave_crunch_issues(inp: ScheduleInput, holidays: set[dt.date]) -> list[Issue]:
     """Instant leave-crunch prechecks with plain-language messages (plan 4).
 
-    The thresholds are derived for the RELAXED 48h rule (the 24h floor is still
-    hard): each day needs two distinct people to field Z+N, and because a night
-    blocks the next day, two people cannot cover two consecutive days. Availability
-    is the section's non-head workers who are neither on Co that day nor away
-    across a Co-bridged weekend; a locked head Z/N counts as one more available
-    person that day (lock-aware, so the head-cover workaround is not blocked).
-    Infirmiere are pool-wide: three distinct people every day.
+    A section's one hard daily duty is now a Z (its nights are pool-wide - the
+    2+0 / 0+2 split covers them from either section). A Z cannot follow a Z, so
+    two consecutive days need two distinct available people; a consecutive pair
+    whose combined availability is under two leaves a day shift unfillable.
+    Availability is the section's non-head workers who are neither on Co that day
+    nor away across a Co-bridged weekend; a locked head Z counts as one more
+    available person that day (lock-aware, so the head-cover workaround is not
+    blocked). Infirmiere are pool-wide: three distinct people every day.
     """
     dates = cal.month_dates(inp.year, inp.month)
     workers = [n for n in inp.nurses if not n.is_head]
@@ -296,9 +314,11 @@ def _leave_crunch_issues(inp: ScheduleInput, holidays: set[dt.date]) -> list[Iss
         return issues
 
     head = next((n for n in inp.nurses if n.is_head), None)
-    head_lock_days = {lock.date for lock in inp.locks
-                      if head is not None and lock.nurse_id == head.id
-                      and lock.shift in (Shift.DAY, Shift.NIGHT)}
+    # Only a locked head DAY shift helps a section field its Z; a locked head N
+    # covers a night, which is now pool-wide (either section), so it does not.
+    head_z_lock_days = {lock.date for lock in inp.locks
+                        if head is not None and lock.nurse_id == head.id
+                        and lock.shift is Shift.DAY}
     by_id = {n.id: n for n in inp.nurses}
 
     for section in (BIG, SMALL):
@@ -309,48 +329,25 @@ def _leave_crunch_issues(inp: ScheduleInput, holidays: set[dt.date]) -> list[Iss
         avail: list[set[int]] = []
         for day in dates:
             people = {w.id for w in sec_workers if day not in off[w.id]}
-            if head_here and day in head_lock_days:
+            if head_here and day in head_z_lock_days:
                 people.add(head.id)
             avail.append(people)
         label = SECTION_LABEL[section]
 
-        # Each day: <2 available cannot field Z+N. The all-on-leave (0) case is
-        # already reported as section_unavailable, so only flag the lone-nurse case.
-        for run in _runs([i for i, s in enumerate(avail) if len(s) == 1]):
-            names = _names(by_id, set().union(*(avail[i] for i in run)))
-            issues.append(Issue("error", "section_leave_crunch",
-                                f"{label}: doar {names} disponibilă(e) pe {_span(dates, run)} - fiecare "
-                                f"zi are nevoie de o asistentă de zi și una de noapte din secție (2 persoane).",
-                                date=dates[run[0]]))
-
-        # Each 2-day window: a union of <3 distinct people cannot cover Z+N on
-        # both days (a night blocks the next day). Only the case where neither day
-        # is already a lone-nurse day (both >=2) is a new finding.
+        # A section's one hard daily duty is now a Z (its night may come from the
+        # other section - the 2+0 / 0+2 fallback). A Z cannot follow a Z, so two
+        # consecutive days need two distinct available people: a consecutive pair
+        # whose combined availability is under two leaves a day shift unfillable.
+        # (A single all-on-leave day is reported as section_unavailable above.)
         two = [i for i in range(len(dates) - 1)
-               if len(avail[i]) >= 2 and len(avail[i + 1]) >= 2
-               and len(avail[i] | avail[i + 1]) < 3]
+               if len(avail[i] | avail[i + 1]) < 2]
         for run in _runs(sorted({i for w in two for i in (w, w + 1)})):
             names = _names(by_id, set().union(*(avail[i] for i in run)))
             issues.append(Issue("error", "section_leave_crunch",
-                                f"{label}: doar {names} disponibilă(e) în intervalul {_span(dates, run)} - două "
-                                f"persoane nu pot acoperi Z+N în zile consecutive (o noapte blochează "
-                                f"ziua următoare).", date=dates[run[0]]))
-
-        # Each 3-day window: a union of <4 with everyone otherwise available is a
-        # soft warning - the stretch will lean on 48h-rest exceptions.
-        three = [i for i in range(len(dates) - 2)
-                 if all(len(avail[i + k]) >= 2 for k in range(3))
-                 and len(avail[i] | avail[i + 1]) >= 3
-                 and len(avail[i + 1] | avail[i + 2]) >= 3
-                 and len(avail[i] | avail[i + 1] | avail[i + 2]) < 4]
-        for run in _runs(sorted({i for w in three for i in (w, w + 1, w + 2)})):
-            union = set().union(*(avail[i] for i in run))
-            names = _names(by_id, union)
-            on_leave = _names(by_id, {w.id for w in sec_workers if w.id not in union})
-            issues.append(Issue("warning", "section_leave_warning",
-                                f"{label}: doar {names} sunt disponibile pe {_span(dates, run)} "
-                                f"({on_leave} în Co) - sunt de așteptat excepții de la odihna de 48h.",
-                                date=dates[run[0]]))
+                                f"{label}: doar {names} disponibilă(e) pe {_span(dates, run)} - fiecare zi "
+                                f"are nevoie de o tură de zi din secție, iar o tură de zi nu poate urma "
+                                f"alteia, deci două zile consecutive nu pot fi acoperite de o singură "
+                                f"persoană.", date=dates[run[0]]))
     return issues
 
 
@@ -444,6 +441,9 @@ def effective_requests(inp: ScheduleInput) -> tuple[list[ShiftRequest], list[Iss
     # independent, so any number can be requested on the same day.
     cap = {"Z": 2 + cfg.extra_day_cap, "N": 2 + cfg.extra_night_cap, "K": 1,
            "8": 1 if inp.staff_type == STAFF_AIDE else len(inp.nurses)}
+    if inp.staff_type != STAFF_AIDE:
+        # asistente: day capped at 4 (days carry the surplus), night exactly 2/day.
+        cap["N"] = 2
     for (day, kind), count in Counter((r.date, r.kind) for r in hards if r.kind != "FREE").items():
         if count > cap[kind]:
             issues.append(Issue("error", "request_overbooked",
