@@ -140,6 +140,18 @@ class Config:
     # capacity) is chosen only when it saves >=2h of total deviation or coverage
     # is otherwise infeasible from leave.
     w_eight_swap: int = 2000
+    # Asistente only: cost per day+section where a section has no night nurse (the
+    # 2+0 / 0+2 split). Nights are exactly 2/day and 1+1 across the two sections is
+    # the norm; this makes the solver keep 1+1 unless the imbalance is needed to
+    # hit hour targets or cover leave. DELIBERATELY below w_dev (1000/hour): an
+    # hour target must never be missed just to preserve 1+1, so a 2+0 day is taken
+    # whenever it strictly helps the hours, and 1+1 wins only when target-neutral.
+    # No 4th-day penalty: with nights fixed at 2, everyone reaching the monthly
+    # target forces a 4th day shift on ~2/3 of days, so a penalty could not reduce
+    # it (measured) and only muddied the objective, leaving the solver stuck on
+    # costlier feasible solutions (gratuitous 48h-rest exceptions). The day cap
+    # stays a hard 4; the day shift simply carries the surplus the nights no longer do.
+    w_night_section: int = 600
 
 
 @dataclass

@@ -233,6 +233,7 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
 
     # --- coverage -------------------------------------------------------------
     swap_terms: list[cp_model.IntVar] = []
+    night_section_exc: list[cp_model.IntVar] = []  # asistente 2+0/0+2 nights
     if is_aide:
         # Infirmiere daily coverage (HARD): 1 Z + 1 N + 1 x 8h. The swap exception
         # (penalized) turns the 8h slot into a second Z -> 2 Z + 1 N, used only when
@@ -249,10 +250,12 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
             m.Add(sum(nvars) <= 1 + cfg.extra_night_cap)
             swap_terms.append(swap)
     else:
-        # HARD per-section day/night, exactly one kitchen. Each day must field at
-        # least one Z from each section and one N from each section (that is how
-        # the 2Z and 2N are formed). A locked head Z/N counts as a constant toward
-        # its section's sum. Staffing caps stay TOTAL-based.
+        # Day (Z): one per section is the rule (2/day), but everyone reaching the
+        # monthly target forces 3-4 Z on most days (nights are fixed at 2, so days
+        # carry the surplus), so the cap is a plain hard 4. Night (N): exactly
+        # 2/day total, one per section preferred but the 2+0 / 0+2 split allowed
+        # under penalty (night_section_exc). Exactly one kitchen. A locked head
+        # Z/N/K counts as a constant toward the relevant sum.
         section_of = {n.id: n.section for n in inp.nurses}
         for di, day in enumerate(dates):
             zvars = [x[k] for n in workers if (k := (n.id, di, Shift.DAY)) in x]
@@ -261,19 +264,29 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
             head_a = head_by_day.get(day)
             head_shift = head_a.shift if head_a is not None else None
             head_section = section_of.get(head_a.nurse_id) if head_a is not None else None
-            # total-based caps (head Z/N/K also occupies a slot)
+            # total-based counts (head Z/N/K also occupies a slot)
             head_z = 1 if head_shift is Shift.DAY else 0
             head_n = 1 if head_shift is Shift.NIGHT else 0
             head_k = 1 if head_shift is Shift.KITCHEN else 0
-            m.Add(sum(zvars) + head_z <= 2 + cfg.extra_day_cap)
-            m.Add(sum(nvars) + head_n <= 2 + cfg.extra_night_cap)
+            # exactly two nights and exactly one kitchen every day
+            m.Add(sum(nvars) + head_n == 2)
             m.Add(sum(kvars) + head_k == 1)
-            for slot, shift, head_here in (("day", Shift.DAY, head_z), ("night", Shift.NIGHT, head_n)):
-                for section in (BIG, SMALL):
-                    pool = [x[k] for n in workers
-                            if n.section == section and (k := (n.id, di, shift)) in x]
-                    const = head_here if head_section == section else 0
-                    m.Add(sum(pool) + const >= 1)
+            # day shifts: hard cap 4 (they carry the hours the nights no longer do)
+            m.Add(sum(zvars) + head_z <= 4)
+            # HARD: one Z per section (the 3rd/4th Z land wherever hours need them)
+            for section in (BIG, SMALL):
+                pool = [x[k] for n in workers
+                        if n.section == section and (k := (n.id, di, Shift.DAY)) in x]
+                const = head_z if head_section == section else 0
+                m.Add(sum(pool) + const >= 1)
+            # SOFT: one N per section preferred; pay w_night_section for a 2+0/0+2
+            for section in (BIG, SMALL):
+                pool = [x[k] for n in workers
+                        if n.section == section and (k := (n.id, di, Shift.NIGHT)) in x]
+                const = head_n if head_section == section else 0
+                uncov = m.NewBoolVar(f"nuncov_{section}_{di}")
+                m.Add(sum(pool) + const + uncov >= 1)
+                night_section_exc.append(uncov)
 
     # --- night minimums --------------------------------------------------------
     nights_of: dict[int, cp_model.IntVar] = {}
@@ -472,6 +485,8 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
         objective_terms.append(cfg.w_cluster * sum(cluster_exc))
     if swap_terms:
         objective_terms.append(cfg.w_eight_swap * sum(swap_terms))
+    if night_section_exc:
+        objective_terms.append(cfg.w_night_section * sum(night_section_exc))
     if rest48_exc:
         objective_terms.append(cfg.w_rest48 * sum(rest48_exc))
     if weekend_floor_slack:
@@ -626,8 +641,10 @@ def _diagnose(inp: ScheduleInput, holidays: set[dt.date],
                 m.Add(sum(pool) + sl >= 1)
                 slacks.append((day, label, sl, 1))
     else:
-        # A locked head Z/N counts toward its section's sum; a locked head K
-        # toward the kitchen sum (plan 3), so a head-covered day is not flagged.
+        # A locked head Z counts toward its section's day sum, a head N toward the
+        # pool-wide night sum, a head K toward the kitchen sum (plan 3), so a
+        # head-covered day is not flagged. Day coverage is per-section (one Z
+        # each); night coverage is pool-wide (two, from either section).
         section_of = {n.id: n.section for n in inp.nurses}
         for di, day in enumerate(dates):
             head_a = head_by_day.get(day)
@@ -636,15 +653,17 @@ def _diagnose(inp: ScheduleInput, holidays: set[dt.date],
             head_z = 1 if head_shift is Shift.DAY else 0
             head_n = 1 if head_shift is Shift.NIGHT else 0
             head_k = 1 if head_shift is Shift.KITCHEN else 0
-            for label, s, head_here in (("zi", Shift.DAY, head_z),
-                                        ("noapte", Shift.NIGHT, head_n)):
-                for section in (BIG, SMALL):
-                    pool = [x[k] for n in workers
-                            if n.section == section and (k := (n.id, di, s)) in x]
-                    const = head_here if head_section == section else 0
-                    sl = m.NewIntVar(0, 1, f"slack_{label}_{section}_{di}")
-                    m.Add(sum(pool) + const + sl >= 1)
-                    slacks.append((day, f"{label} {SECTION_LABEL[section]}", sl, 1))
+            for section in (BIG, SMALL):
+                pool = [x[k] for n in workers
+                        if n.section == section and (k := (n.id, di, Shift.DAY)) in x]
+                const = head_z if head_section == section else 0
+                sl = m.NewIntVar(0, 1, f"slack_zi_{section}_{di}")
+                m.Add(sum(pool) + const + sl >= 1)
+                slacks.append((day, f"zi {SECTION_LABEL[section]}", sl, 1))
+            npool = [x[k] for n in workers if (k := (n.id, di, Shift.NIGHT)) in x]
+            nsl = m.NewIntVar(0, 2, f"slack_noapte_{di}")
+            m.Add(sum(npool) + head_n + nsl >= 2)
+            slacks.append((day, "noapte", nsl, 2))
             kpool = [x[k] for n in workers if (k := (n.id, di, Shift.KITCHEN)) in x]
             ksl = m.NewIntVar(0, 1, f"slack_kitchen_{di}")
             m.Add(sum(kpool) + head_k + ksl >= 1)
