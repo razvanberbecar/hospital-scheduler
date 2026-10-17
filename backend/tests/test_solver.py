@@ -191,10 +191,13 @@ def test_unconstrained_month_uses_no_rest48_exceptions(july_result):
     assert "rest48_exception" not in {w.code for w in report.warnings}
 
 
-def test_section_crunch_forces_a_rest48_exception():
+def test_section_crunch_solves_via_a_penalized_exception():
     """Plan 1: a section squeezed to 3 available nurses for three consecutive days
-    is INFEASIBLE under the old hard 48h rule but now SOLVES by taking at least one
-    penalized 48h exception - a warning, never a violation."""
+    is INFEASIBLE under the old hard 48h rule but now SOLVES by bending a soft rule
+    - a warning, never a violation. With nights no longer tied to the section, the
+    solver relieves it either by splitting the two nights 2+0 into the other
+    section (coverage_night_section) or by bending the 48h rest (rest48_exception);
+    both are cheaper than failing, so at least one appears."""
     holidays = JULY_HOLIDAYS
     workdays = [d for d in cal.month_dates(2026, 7) if not cal.is_offday(d, holidays)]
     # three consecutive CALENDAR days (Mon-Wed July 6-8): a weekend gap inside
@@ -202,14 +205,15 @@ def test_section_crunch_forces_a_rest48_exception():
     crunch = workdays[3:6]
     assert [d.day for d in crunch] == [6, 7, 8]
     # BIG workers are ids 1..7; put four of them on Co across the crunch so only
-    # three BIG nurses remain to field 1 Z + 1 N each of the three days.
+    # three BIG nurses remain to field the section's Z each of the three days.
     leave = {nid: set(crunch) for nid in (1, 2, 3, 4)}
     inp = july_input(leave=leave)
     res = solve(inp)
     assert res.ok, (res.status, res.diagnosis, [i.message for i in res.prechecks])
     report = validate(inp, res.assignments)
     assert report.ok, [v.message for v in report.violations]
-    assert "rest48_exception" in {w.code for w in report.warnings}
+    codes = {w.code for w in report.warnings}
+    assert codes & {"rest48_exception", "coverage_night_section"}, codes
 
 
 def test_validator_flags_missing_section_day_coverage():

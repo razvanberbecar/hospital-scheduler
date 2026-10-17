@@ -247,9 +247,12 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
                 V(Issue("violation", "coverage_day",
                         f"{day}: {zc} infirmiere de zi depășesc plafonul de {2 + cfg.extra_day_cap}.", date=day))
     else:
-        # HARD per-section day/night, exactly one kitchen. Every day needs one Z
-        # and one N from EACH section (that is how the 2Z, 2N are formed). The
-        # head nurse's own Z/N counts toward her section. Caps stay total-based.
+        # Day: one Z per section is HARD (that is how the 2 Z form); 3-4 Z is
+        # normal (everyone must reach target and days carry the surplus nights no
+        # longer do), so only >4 is a violation. Night: exactly 2/day, one per
+        # section preferred but the 2+0 / 0+2 split allowed - a section with no
+        # night is a warning, not a violation. Exactly one kitchen. The head's own
+        # Z/N counts toward her section.
         def section_counts(lst: list[Assignment]) -> dict[str, int]:
             counts = {BIG: 0, SMALL: 0}
             for a in lst:
@@ -266,22 +269,30 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
             report.per_day[day] = {
                 "Z_big": zc[BIG], "Z_small": zc[SMALL],
                 "N_big": nc[BIG], "N_small": nc[SMALL], "K": len(k)}
-            if len(z) > 2 + cfg.extra_day_cap:
+            # --- day shifts: <=4, one per section ---
+            if len(z) > 4:
                 V(Issue("violation", "coverage_day",
-                        f"{day}: {len(z)} asistente de zi depășesc plafonul de {2 + cfg.extra_day_cap}.", date=day))
-            if len(nn) > 2 + cfg.extra_night_cap:
+                        f"{day}: {len(z)} asistente de zi depășesc plafonul de 4.", date=day))
+            for section in (BIG, SMALL):
+                if zc[section] < 1:
+                    V(Issue("violation", "coverage_day_section",
+                            f"{day}: nicio asistentă de zi din {SECTION_LABEL[section]} - fiecare secție "
+                            f"are nevoie de o tură de zi în fiecare zi.", date=day))
+            # --- nights: exactly 2, one per section preferred (2+0 is a warning) ---
+            if len(nn) != 2:
                 V(Issue("violation", "coverage_night",
-                        f"{day}: {len(nn)} asistente de noapte depășesc plafonul de {2 + cfg.extra_night_cap}.", date=day))
+                        f"{day}: {len(nn)} asistente de noapte; sunt necesare exact 2 în fiecare zi.", date=day))
+            else:
+                for section in (BIG, SMALL):
+                    if nc[section] == 0:
+                        other = SECTION_LABEL[SMALL if section == BIG else BIG]
+                        W(Issue("warning", "coverage_night_section",
+                                f"{day}: ambele ture de noapte sunt din {other}, niciuna din "
+                                f"{SECTION_LABEL[section]} - permis (2+0), dar de preferat 1+1.", date=day))
+            # --- kitchen: exactly one ---
             if len(k) != 1:
                 V(Issue("violation", "coverage_kitchen",
                         f"{day}: {len(k)} asistentă(e) la bucătărie; exact 1 este obligatorie în fiecare zi.", date=day))
-            for label, code, counts in (("de zi", "coverage_day_section", zc),
-                                        ("de noapte", "coverage_night_section", nc)):
-                for section in (BIG, SMALL):
-                    if counts[section] < 1:
-                        V(Issue("violation", code,
-                                f"{day}: nicio asistentă {label} din {SECTION_LABEL[section]} - fiecare secție "
-                                f"are nevoie de o tură {label} în fiecare zi.", date=day))
 
         # head nurse present every working day (unless on leave) - a warning now:
         # her cells are hand-editable and may deliberately be cleared.
