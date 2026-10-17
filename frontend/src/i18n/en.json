@@ -148,6 +148,8 @@
     "approveConfirmTitle": "Approve the schedule?",
     "approveConfirmBody": "The schedule becomes official; the previous approved month is locked permanently.",
     "approveWarnCount": "Warning: {{count}} warnings.",
+    "approveAnywayHint": "You can still approve: approval is what lets the next month pick up this month's final days.",
+    "approveAnyway": "Approve anyway",
     "solverStatus": "Solver status",
     "objective": "Objective",
     "relaxedNights": "Relaxed nights",

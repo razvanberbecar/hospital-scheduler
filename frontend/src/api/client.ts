@@ -227,8 +227,9 @@ export function patchAssignments(id: number, body: AssignmentsPatch): Promise<Va
   });
 }
 
-export function approveSchedule(id: number): Promise<ApprovalOut> {
-  return request<ApprovalOut>(`/api/schedules/${id}/approve`, { method: "POST" });
+export function approveSchedule(id: number, force = false): Promise<ApprovalOut> {
+  const qs = force ? "?force=true" : "";
+  return request<ApprovalOut>(`/api/schedules/${id}/approve${qs}`, { method: "POST" });
 }
 
 export function reopenSchedule(id: number): Promise<ScheduleDetailOut> {

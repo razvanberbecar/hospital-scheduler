@@ -393,6 +393,50 @@ def test_approve_flow_and_chain(client):
     assert client.get(f"/api/schedules/{sid}", headers=h).json()["status"] == "locked"
 
 
+def test_force_approve_overrides_violations(client):
+    """A month with open violations is refused normally but approves with
+    ?force=true, so an imperfect month can still be approved (it records the
+    prev_tail the next month's generator needs). The overridden violations are
+    kept on the snapshot for traceability; a nurse still cannot force."""
+    h, ids = _manager(client)
+    sid = client.post("/api/schedules", headers=h, json=_create_payload(ids)).json()["id"]
+    assert client.post(f"/api/schedules/{sid}/generate", headers=h,
+                       json={"respect_locks": False}).status_code == 200
+
+    # clearing a kitchen cell deterministically breaks coverage (a violation)
+    cell = _first_kitchen_cell(client, h, sid)
+    client.patch(f"/api/schedules/{sid}/assignments", headers=h, json={
+        "edits": [{"user_id": cell["user_id"], "date": cell["date"], "shift": None}]})
+
+    # a nurse may never force; the normal approve is refused for the manager
+    nurse_h = auth(login(client, "lung.paula"))
+    assert client.post(f"/api/schedules/{sid}/approve?force=true",
+                       headers=nurse_h).status_code == 403
+    assert client.post(f"/api/schedules/{sid}/approve", headers=h).status_code == 409
+
+    # force=true approves despite the open violation
+    r = client.post(f"/api/schedules/{sid}/approve?force=true", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["version"] == 1
+    assert client.get(f"/api/schedules/{sid}", headers=h).json()["status"] == "approved"
+
+    # the overridden violation is recorded on the snapshot
+    snap = client.get(f"/api/schedules/{sid}/approvals/1", headers=h).json()["snapshot"]
+    assert any(v["code"] == "coverage_kitchen" for v in snap["overridden_violations"])
+
+
+def test_force_approve_on_a_clean_month_records_no_overrides(client):
+    """force=true on a month with no violations still approves and records an
+    empty override list - forcing never invents a problem."""
+    h, ids = _manager(client)
+    sid = client.post("/api/schedules", headers=h, json=_create_payload(ids)).json()["id"]
+    client.post(f"/api/schedules/{sid}/generate", headers=h, json={"respect_locks": False})
+    r = client.post(f"/api/schedules/{sid}/approve?force=true", headers=h)
+    assert r.status_code == 200, r.text
+    snap = client.get(f"/api/schedules/{sid}/approvals/1", headers=h).json()["snapshot"]
+    assert snap["overridden_violations"] == []
+
+
 def test_nurse_sees_approved_with_own_totals_only(client):
     h, ids = _manager(client)
     sid = client.post("/api/schedules", headers=h, json=_create_payload(ids)).json()["id"]

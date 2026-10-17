@@ -629,9 +629,16 @@ def edit_assignments(schedule_id: int, body: AssignmentsPatch, db: Db, manager: 
 
 
 @router.post("/{schedule_id}/approve", response_model=ApprovalOut)
-def approve(schedule_id: int, db: Db, manager: Manager) -> ApprovalOut:
-    """Approve a clean month (plan section 8): freeze an immutable snapshot,
-    flip to approved, and permanently lock the previous approved month.
+def approve(schedule_id: int, db: Db, manager: Manager, force: bool = False) -> ApprovalOut:
+    """Approve a month (plan section 8): freeze an immutable snapshot, flip to
+    approved, and permanently lock the previous approved month.
+
+    A clean month (no violations) approves normally. The manager may also force
+    approval of a month that still has violations with ?force=true: approval is
+    what records the month's last two days (prev_tail) for the next month's
+    generator, so a month that cannot be made perfect must still be approvable.
+    The overridden violations are kept in the approval snapshot for traceability.
+    Warnings never block approval and need no override.
 
     Re-approval of an already-approved month is allowed only while the next
     month is still a draft or absent."""
@@ -647,10 +654,14 @@ def approve(schedule_id: int, db: Db, manager: Manager) -> ApprovalOut:
             raise HTTPException(409, "Nu se poate re-aproba: luna următoare nu mai este ciornă")
 
     report = _validate_current(db, schedule)
-    if not report.ok:
+    if not report.ok and not force:
         raise HTTPException(409, {"message": "Graficul are încălcări și nu poate fi aprobat",
                                   "violations": [_issue_out(i).model_dump(mode="json")
                                                  for i in report.violations]})
+    # When forced past open violations, keep them on the snapshot so the override
+    # is traceable; an empty list for a clean approval.
+    overridden = ([_issue_out(i).model_dump(mode="json") for i in report.violations]
+                  if not report.ok else [])
 
     latest = _latest_approval(db, schedule.id)
     version = (latest.version + 1) if latest is not None else 1
@@ -665,6 +676,7 @@ def approve(schedule_id: int, db: Db, manager: Manager) -> ApprovalOut:
             "leave_days": t.leave_days, "total": t.total,
             "effective_target": t.effective_target, "owed": t.owed,
             "nights": t.nights, "kitchens": t.kitchens} for nid, t in report.totals.items()},
+        "overridden_violations": overridden,
     }
     approval = Approval(schedule_id=schedule.id, version=version,
                         approved_by=manager.id, snapshot=snapshot)
