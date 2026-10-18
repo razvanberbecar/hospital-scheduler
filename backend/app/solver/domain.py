@@ -116,8 +116,7 @@ class Config:
     # With nobody on leave every share is equal - the old "spread evenly". The
     # penalty is on a presence-scaled deviation (~100x hours), so this small
     # weight already reads as ~100/hour of deviation: above the minor spreads,
-    # but kept below w_rest48/w_dev so weekend fairness never buys a bent rest day
-    # or a missed hour target.
+    # but kept below w_dev so weekend fairness never buys a missed hour target.
     w_weekend_fair: int = 1
     # Infirmiere only: balances the daily 8h slot across aides the same way -
     # each aide's 8h-shift count is pulled toward a share proportional to how much
@@ -129,12 +128,6 @@ class Config:
     w_kitchen_run: int = 20       # >3 consecutive kitchen days
     w_cluster: int = 20           # >5 working days in any 7-day window
     w_kspread: int = 10           # kitchen-count spread among kitchen-capable
-    # Cost per worked second-day-after-night (the 48h-rest exception, plan 1).
-    # The first day after a night stays hard-blocked (24h floor); only the second
-    # rest day is bendable. w_dev is 1000/hour, so an exception is taken only when
-    # it saves >=2h of deviation or is forced by coverage/hard pins; a soft
-    # request denial (w_request 500) stays cheaper, so wishes are dropped first.
-    w_rest48: int = 2000
     # Infirmiere only: cost per day where the daily 8h slot is swapped for a
     # second Z (1Z+1N+1x8 -> 2Z+1N). w_dev is 1000/hour, so a swap (adds 4h of
     # capacity) is chosen only when it saves >=2h of total deviation or coverage
@@ -149,8 +142,8 @@ class Config:
     # No 4th-day penalty: with nights fixed at 2, everyone reaching the monthly
     # target forces a 4th day shift on ~2/3 of days, so a penalty could not reduce
     # it (measured) and only muddied the objective, leaving the solver stuck on
-    # costlier feasible solutions (gratuitous 48h-rest exceptions). The day cap
-    # stays a hard 4; the day shift simply carries the surplus the nights no longer do.
+    # costlier feasible solutions. The day cap stays a hard 4; the day shift simply
+    # carries the surplus the nights no longer do.
     w_night_section: int = 600
 
 
