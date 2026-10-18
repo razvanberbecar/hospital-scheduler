@@ -183,25 +183,25 @@ def test_determinism_same_seed_same_schedule():
     assert a.assignments == b.assignments
 
 
-def test_unconstrained_month_uses_no_rest48_exceptions(july_result):
-    """Plan 1: with no leave pressure the solver never bends the 48h rest, so
-    the validator reports no rest48_exception warnings."""
+def test_no_rest_exception_warnings(july_result):
+    """Flat 16h rule (both staff types, decided 2026-10-18): the 48h-exception
+    mechanism is gone entirely, so the validator never reports a rest48_exception
+    warning on any schedule - pressured or not."""
     inp, res = july_result
     report = validate(inp, res.assignments)
     assert "rest48_exception" not in {w.code for w in report.warnings}
 
 
-def test_section_crunch_solves_via_a_penalized_exception():
-    """Plan 1: a section squeezed to 3 available nurses for three consecutive days
-    is INFEASIBLE under the old hard 48h rule but now SOLVES by bending a soft rule
-    - a warning, never a violation. With nights no longer tied to the section, the
-    solver relieves it either by splitting the two nights 2+0 into the other
-    section (coverage_night_section) or by bending the 48h rest (rest48_exception);
-    both are cheaper than failing, so at least one appears."""
+def test_section_crunch_solves_with_the_freed_second_day():
+    """A section squeezed to 3 available nurses for three consecutive days was
+    INFEASIBLE under the old hard 48h rule. Under the flat-16h rule (decided
+    2026-10-18) the second day after a night is freely workable, so the crunch
+    SOLVES cleanly - a valid schedule with no violations and, since the second
+    day is no longer penalized, no rest48_exception warning at all."""
     holidays = JULY_HOLIDAYS
     workdays = [d for d in cal.month_dates(2026, 7) if not cal.is_offday(d, holidays)]
     # three consecutive CALENDAR days (Mon-Wed July 6-8): a weekend gap inside
-    # the window would hand out free rest days and no exception would be needed
+    # the window would hand out free rest days and the crunch would ease on its own
     crunch = workdays[3:6]
     assert [d.day for d in crunch] == [6, 7, 8]
     # BIG workers are ids 1..7; put four of them on Co across the crunch so only
@@ -212,8 +212,7 @@ def test_section_crunch_solves_via_a_penalized_exception():
     assert res.ok, (res.status, res.diagnosis, [i.message for i in res.prechecks])
     report = validate(inp, res.assignments)
     assert report.ok, [v.message for v in report.violations]
-    codes = {w.code for w in report.warnings}
-    assert codes & {"rest48_exception", "coverage_night_section"}, codes
+    assert "rest48_exception" not in {w.code for w in report.warnings}
 
 
 def test_validator_flags_missing_section_day_coverage():

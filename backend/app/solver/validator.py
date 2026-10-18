@@ -192,22 +192,15 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
             if today is None:
                 continue
             prev1 = shift_on(n.id, day - dt.timedelta(days=1))
-            prev2 = shift_on(n.id, day - dt.timedelta(days=2))
             if prev1 is Shift.NIGHT:
                 # the 24h floor is absolute: the first day after a night is never
-                # worked (plan 1), so this stays a violation blocking approval.
+                # worked, so this stays a violation blocking approval. The second
+                # day after a night carries no rule (flat 16h, both staff types,
+                # decided 2026-10-18): it is freely workable, nothing reported.
                 V(Issue("violation", "rest_after_night",
                         f"{n.name}: lucrează {today.value} pe {day}, dar a avut tură de noapte în "
                         f"ziua precedentă - prima zi după o tură de noapte nu poate fi lucrată "
                         f"niciodată (odihnă de 24h).", nurse_id=n.id, date=day))
-            elif prev2 is Shift.NIGHT:
-                # the second rest day is now a penalized exception, not a hard
-                # rule (plan 1): report it as a warning, do not block approval.
-                two_before = day - dt.timedelta(days=2)
-                W(Issue("warning", "rest48_exception",
-                        f"{n.name}: lucrează {today.value} pe {day}, la doar o zi întreagă după "
-                        f"noaptea din {two_before} - excepție de la odihna de 48h (permisă, dar rară).",
-                        nurse_id=n.id, date=day))
             elif prev1 is Shift.DAY and today is not Shift.NIGHT:
                 V(Issue("violation", "rest_after_day",
                         f"{n.name}: {today.value} pe {day} începe la mai puțin de 24h după tura de zi precedentă - "

@@ -455,11 +455,13 @@ def effective_requests(inp: ScheduleInput) -> tuple[list[ShiftRequest], list[Iss
         name = by_id[nid].name
         for day, kind in day_map.items():
             nxt1 = day_map.get(day + dt.timedelta(days=1))
-            nxt2 = day_map.get(day + dt.timedelta(days=2))
-            if kind == "N" and (nxt1 not in (None, "FREE") or nxt2 not in (None, "FREE")):
+            if kind == "N" and nxt1 not in (None, "FREE"):
+                # Flat 16h rule (both staff types, decided 2026-10-18): only the
+                # next day is the hard 24h floor; the second day after a night is
+                # freely workable, so only a hard request on day+1 collides.
                 issues.append(Issue("error", "request_rest",
-                                    f"{name}: o noapte obligatorie pe {day} necesită 48h de odihnă - cererea "
-                                    f"obligatorie din ziua/zilele următoare nu poate fi respectată.", nid, day))
+                                    f"{name}: o noapte obligatorie pe {day} necesită 24h de odihnă - cererea "
+                                    f"obligatorie din ziua următoare nu poate fi respectată.", nid, day))
             elif kind == "Z" and nxt1 not in (None, "FREE", "N"):
                 issues.append(Issue("error", "request_rest",
                                     f"{name}: după o tură de zi obligatorie pe {day}, în ziua următoare poate urma "

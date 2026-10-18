@@ -112,7 +112,7 @@ def test_whole_section_on_leave_one_day_is_an_error():
     assert "section_unavailable" in codes(run_prechecks(inp2), "error")
 
 
-# --- leave-crunch prechecks (plan 4, thresholds for the relaxed 48h rule) ------
+# --- leave-crunch prechecks (plan 4): a section's Z cannot follow a Z ----------
 # July 8/9/10 2026 are consecutive Wed/Thu/Fri working days. BIG workers are
 # ids 1..7, SMALL workers 8/9/10/12/13/14, and the head (id 11) is SMALL.
 D8, D9, D10 = dt.date(2026, 7, 8), dt.date(2026, 7, 9), dt.date(2026, 7, 10)

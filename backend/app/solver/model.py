@@ -170,60 +170,41 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
             m.AddAtMostOne(tops)
 
     # --- rest rules -----------------------------------------------------------
-    # After a night, the first day is the HARD 24h floor (never worked); the
-    # second day is a penalized exception (plan 1: 48h rest, rarely overlooked).
-    # One r48 BoolVar per night counts a worked second rest day (AddAtMostOne per
-    # day already caps that day at one shift), penalized w_rest48 in the objective.
-    rest48_exc: list[cp_model.IntVar] = []
+    # Flat "16h free between shifts" for BOTH staff types (decided 2026-10-18;
+    # extended from asistente to infirmiere the same day). Every shift is 12h and
+    # starts only ~07:00 (Z/K/8) or 19:00/18:00 (N), so 16h of rest always clears
+    # the whole next day, and the second day after a night (>=24h later) is freely
+    # workable. In day-granular terms that leaves exactly two hard rules: after a
+    # day shift only a night may follow, and the first full day after a night is
+    # never worked (the hard 24h floor). The old penalized 48h exception is gone.
     for n in workers:
         for di in range(D):
             zd = x.get((n.id, di, Shift.DAY))
             nd = x.get((n.id, di, Shift.NIGHT))
             if zd is not None and di + 1 < D:
                 # after a day shift, the only allowed next-day shift is a night
-                # (an 8h slot behaves like K here: it may not follow a day shift)
+                # (a next-morning Z/K/8/top-up would be only 12h rest, below 16h)
                 for other in (x.get((n.id, di + 1, Shift.DAY)),
                               x.get((n.id, di + 1, Shift.KITCHEN)),
                               x.get((n.id, di + 1, Shift.EIGHT)),
                               t4.get((n.id, di + 1)), t8.get((n.id, di + 1))):
                     if other is not None:
                         m.AddAtMostOne([zd, other])
-            if nd is not None:
-                if di + 1 < D:  # hard 24h floor: the day after a night is never worked
-                    for other in day_vars(n.id, di + 1):
-                        m.AddAtMostOne([nd, other])
-                if di + 2 < D:  # soft 48h: the second rest day may be worked, penalized
-                    second = day_vars(n.id, di + 2)
-                    if second:
-                        r48 = m.NewBoolVar(f"r48_{n.id}_{di}")
-                        for other in second:
-                            m.Add(other + nd <= 1 + r48)
-                        rest48_exc.append(r48)
+            if nd is not None and di + 1 < D:
+                # hard 24h floor: the day after a night is never worked
+                for other in day_vars(n.id, di + 1):
+                    m.AddAtMostOne([nd, other])
 
     # previous-month tail blocks (rest rules across the boundary)
     first = dates[0]
     for n in workers:
         tail = inp.prev_tail.get(n.id, {})
         last_prev = tail.get(first - dt.timedelta(days=1))
-        second_prev = tail.get(first - dt.timedelta(days=2))
         if last_prev is Shift.NIGHT:
-            # day 0 is the hard 24h floor; day 1 is the penalized 48h exception.
+            # day 0 is the hard 24h floor; the second day (day 1) is freely
+            # workable under the flat 16h rule, so nothing else is pinned.
             for v in day_vars(n.id, 0):
                 m.Add(v == 0)
-            d1 = day_vars(n.id, 1)
-            if d1:
-                exc = m.NewBoolVar(f"r48_tail1_{n.id}")
-                for v in d1:
-                    m.Add(v <= exc)
-                rest48_exc.append(exc)
-        if second_prev is Shift.NIGHT:
-            # a night two days before the month makes day 0 the second rest day.
-            d0 = day_vars(n.id, 0)
-            if d0:
-                exc = m.NewBoolVar(f"r48_tail0_{n.id}")
-                for v in d0:
-                    m.Add(v <= exc)
-                rest48_exc.append(exc)
         if last_prev is Shift.DAY:
             for other in (x.get((n.id, 0, Shift.DAY)), x.get((n.id, 0, Shift.KITCHEN)),
                           x.get((n.id, 0, Shift.EIGHT)),
@@ -487,8 +468,6 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
         objective_terms.append(cfg.w_eight_swap * sum(swap_terms))
     if night_section_exc:
         objective_terms.append(cfg.w_night_section * sum(night_section_exc))
-    if rest48_exc:
-        objective_terms.append(cfg.w_rest48 * sum(rest48_exc))
     if weekend_floor_slack:
         objective_terms.append(W_HARD * sum(weekend_floor_slack))
     if aide_run_slack:
@@ -625,8 +604,8 @@ def _diagnose(inp: ScheduleInput, holidays: set[dt.date],
                 m.AddAtMostOne(vs)
             nd = x.get((n.id, di, Shift.NIGHT))
             if nd is not None and di + 1 < D:
-                # only the hard 24h floor here; the 48h second day is now a soft
-                # exception (plan 1), so this relaxation drops the di+2 block.
+                # only the hard 24h floor after a night (flat 16h rule); the second
+                # day after a night carries no constraint for either staff type.
                 for s in (Shift.DAY, Shift.NIGHT, THIRD):
                     other = x.get((n.id, di + 1, s))
                     if other is not None:
