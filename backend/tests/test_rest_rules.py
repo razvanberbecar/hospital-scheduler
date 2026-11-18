@@ -70,15 +70,25 @@ def test_after_night_shift(gap, shift, expected):
     assert rest_codes(assignments) == expected
 
 
-@pytest.mark.parametrize("staff_type", [STAFF_NURSE, STAFF_AIDE])
 @pytest.mark.parametrize("shift", [Shift.DAY, Shift.KITCHEN])
-def test_second_day_after_night_is_free_for_both_staff(shift, staff_type):
-    """Flat 16h rule (both staff types, decided 2026-10-18): with 12h shifts only
-    the hard 24h floor remains, so the second day after a night is freely workable
-    - no violation and no warning, whatever the staff type."""
+def test_second_day_after_night_is_free_for_asistente(shift):
+    """Flat 16h rule for asistente (decided 2026-10-18): with 12h shifts only the
+    hard 24h floor remains, so the second day after a night is freely workable -
+    no violation and no warning."""
     assignments = [mk(1, D6, Shift.NIGHT), mk(1, D8, shift)]  # D8 = two days later
-    assert rest_codes(assignments, staff_type=staff_type) == set()
-    assert rest_warnings(assignments, staff_type=staff_type) == set()
+    assert rest_codes(assignments) == set()
+    assert rest_warnings(assignments) == set()
+
+
+@pytest.mark.parametrize("shift", [Shift.DAY, Shift.EIGHT, Shift.NIGHT])
+def test_second_day_after_night_is_a_violation_for_infirmiere(shift):
+    """Infirmiere (decided 2026-11-18): the night closes the 8-Z-N block and is
+    followed by 48h off, so working the second day after it is a violation."""
+    assignments = [mk(1, D6, Shift.NIGHT), mk(1, D8, shift)]
+    assert rest_codes(assignments, staff_type=STAFF_AIDE) == {"rest_after_night_48h"}
+    # the third day after the night is free again
+    later = [mk(1, D6, Shift.NIGHT), mk(1, D9, shift)]
+    assert rest_codes(later, staff_type=STAFF_AIDE) == set()
 
 
 def test_after_eight_hour_shift_next_day_free():
@@ -86,17 +96,30 @@ def test_after_eight_hour_shift_next_day_free():
     assert rest_codes([mk(1, D6, Shift.KITCHEN), mk(1, D7, Shift.KITCHEN)]) == set()
 
 
-@pytest.mark.parametrize("staff_type", [STAFF_NURSE, STAFF_AIDE])
-def test_prev_month_tail_night_blocks_first_day_only(staff_type):
+def test_prev_month_tail_night_blocks_first_day_only():
     """A night on the last day of the previous month: day 1 is always a hard
-    violation (24h floor). The second day (day 2) is freely workable for both
-    staff types under the flat 16h rule - no violation and no warning."""
+    violation (24h floor). For asistente the second day (day 2) is freely
+    workable under the flat 16h rule - no violation and no warning."""
     tail = {1: {dt.date(2026, 6, 30): Shift.NIGHT}}
     d1, d2, d3 = dt.date(2026, 7, 1), dt.date(2026, 7, 2), dt.date(2026, 7, 3)
-    assert rest_codes([mk(1, d1, Shift.DAY)], tail, staff_type) == {"rest_after_night"}
-    assert rest_codes([mk(1, d2, Shift.DAY)], tail, staff_type) == set()
-    assert rest_warnings([mk(1, d2, Shift.DAY)], tail, staff_type) == set()
-    assert rest_codes([mk(1, d3, Shift.DAY)], tail, staff_type) == set()
+    assert rest_codes([mk(1, d1, Shift.DAY)], tail) == {"rest_after_night"}
+    assert rest_codes([mk(1, d2, Shift.DAY)], tail) == set()
+    assert rest_warnings([mk(1, d2, Shift.DAY)], tail) == set()
+    assert rest_codes([mk(1, d3, Shift.DAY)], tail) == set()
+
+
+def test_prev_month_tail_night_blocks_two_days_for_infirmiere():
+    """Infirmiere take 48h off after a night, across the month boundary too: a
+    night on the previous month's last day blocks day 1 and day 2; a night on its
+    second-to-last day blocks day 1."""
+    d1, d2, d3 = dt.date(2026, 7, 1), dt.date(2026, 7, 2), dt.date(2026, 7, 3)
+    last = {1: {dt.date(2026, 6, 30): Shift.NIGHT}}
+    assert rest_codes([mk(1, d1, Shift.EIGHT)], last, STAFF_AIDE) == {"rest_after_night"}
+    assert rest_codes([mk(1, d2, Shift.EIGHT)], last, STAFF_AIDE) == {"rest_after_night_48h"}
+    assert rest_codes([mk(1, d3, Shift.EIGHT)], last, STAFF_AIDE) == set()
+    second_last = {1: {dt.date(2026, 6, 29): Shift.NIGHT}}
+    assert rest_codes([mk(1, d1, Shift.EIGHT)], second_last, STAFF_AIDE) == {"rest_after_night_48h"}
+    assert rest_codes([mk(1, d2, Shift.EIGHT)], second_last, STAFF_AIDE) == set()
 
 
 def test_prev_month_tail_day_allows_only_night():

@@ -100,9 +100,15 @@ class Config:
     weekend_floor: int = 24
     # Infirmiere only: hard ceiling on consecutive working days (decided
     # 2026-09-17), so an aide runs short 8-Z-N stretches (3 days), never 8-8-Z-N.
+    # Since 2026-11-18 the 8-Z-N block itself is a hard rule (see model.py); this
+    # cap still keeps a top-up from being glued onto a block.
     max_consec_aide: int = 3
     seed: int = 42
     max_time_s: float = 30.0
+    # Optional CP-SAT deterministic-time budget. Unlike max_time_s it does not
+    # depend on CPU load, so with workers=1 the same seed gives the same schedule
+    # even when the search stops before proving optimality (used by tests).
+    max_det_time: float | None = None
     workers: int = 8
     # objective weights, roughly an order of magnitude apart (priority list)
     w_dev: int = 1_000            # per hour of |target deviation|
@@ -133,6 +139,14 @@ class Config:
     # capacity) is chosen only when it saves >=2h of total deviation or coverage
     # is otherwise infeasible from leave.
     w_eight_swap: int = 2000
+    # Infirmiere only: work comes in 8 -> Z -> N blocks on three consecutive days,
+    # followed by 48h off (decided 2026-11-18). A Z that is not preceded by the
+    # block's 8h shift - the second Z of a 2Z+1N swap day, or the Z the day after a
+    # swap day - is the one tolerated break of the block, allowed only around a
+    # swap day and penalised per occurrence. Deliberately above the band's worth of
+    # target deviation (12h x w_dev 1000/hour), so the solver breaks a block only
+    # when coverage or leave forces it, never to tune hours.
+    w_aide_block_break: int = 20_000
     # Asistente only: cost per day+section where a section has no night nurse (the
     # 2+0 / 0+2 split). Nights are exactly 2/day and 1+1 across the two sections is
     # the norm; this makes the solver keep 1+1 unless the imbalance is needed to

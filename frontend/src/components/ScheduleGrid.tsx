@@ -242,7 +242,9 @@ export default function ScheduleGrid(props: ScheduleGridProps) {
                 days={days}
                 dayClass={dayClass}
                 value={(d) => coverageMap.get(d)?.E8 ?? 0}
-                bad={(v) => v > 1}
+                // Several 8h shifts a day are normal (each opens an 8-Z-N block);
+                // a day is short only with no 8h and no swap (a second Z).
+                bad={(v, d) => v < 1 && (coverageMap.get(d)?.Z ?? 0) < 2}
                 totalColSpan={totalColSpan}
               />
             </>
@@ -309,7 +311,7 @@ function CoverageRow({
   days: string[];
   dayClass: (d: string) => string;
   value: (d: string) => number;
-  bad: (v: number) => boolean;
+  bad: (v: number, d: string) => boolean;
   totalColSpan: number;
 }) {
   return (
@@ -318,7 +320,7 @@ function CoverageRow({
       {days.map((d) => {
         const v = value(d);
         return (
-          <td key={d} className={`cell ${dayClass(d)} ${bad(v) ? "coverage-bad" : ""}`}>
+          <td key={d} className={`cell ${dayClass(d)} ${bad(v, d) ? "coverage-bad" : ""}`}>
             {v}
           </td>
         );

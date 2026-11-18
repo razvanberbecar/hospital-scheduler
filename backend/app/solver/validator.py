@@ -192,15 +192,23 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
             if today is None:
                 continue
             prev1 = shift_on(n.id, day - dt.timedelta(days=1))
+            prev2 = shift_on(n.id, day - dt.timedelta(days=2))
             if prev1 is Shift.NIGHT:
                 # the 24h floor is absolute: the first day after a night is never
-                # worked, so this stays a violation blocking approval. The second
-                # day after a night carries no rule (flat 16h, both staff types,
-                # decided 2026-10-18): it is freely workable, nothing reported.
+                # worked, so this stays a violation blocking approval. For
+                # asistente the second day after a night carries no rule (flat
+                # 16h, decided 2026-10-18); infirmiere see the 48h check below.
                 V(Issue("violation", "rest_after_night",
                         f"{n.name}: lucrează {today.value} pe {day}, dar a avut tură de noapte în "
                         f"ziua precedentă - prima zi după o tură de noapte nu poate fi lucrată "
                         f"niciodată (odihnă de 24h).", nurse_id=n.id, date=day))
+            elif is_aide and prev2 is Shift.NIGHT:
+                # infirmiere (decided 2026-11-18): the night closes the 8-Z-N
+                # block and is followed by 48h off, so the second day is free too
+                V(Issue("violation", "rest_after_night_48h",
+                        f"{n.name}: lucrează {today.value} pe {day}, la doar o zi după tura de noapte "
+                        f"din {day - dt.timedelta(days=2)} - după blocul 8-Z-N infirmierele au 48h "
+                        f"de pauză (două zile libere).", nurse_id=n.id, date=day))
             elif prev1 is Shift.DAY and today is not Shift.NIGHT:
                 V(Issue("violation", "rest_after_day",
                         f"{n.name}: {today.value} pe {day} începe la mai puțin de 24h după tura de zi precedentă - "
@@ -208,9 +216,10 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
 
     # --- coverage -------------------------------------------------------------
     if is_aide:
-        # Infirmiere: each day must be 1Z + 1N + 1x8, or the accepted swap
-        # exception 2Z + 1N (e == 0, z >= 2). A day that is neither is a
-        # violation. Caps mirror the model (Z <= 2 + extra_day_cap once swapped,
+        # Infirmiere: each day must be 1Z + 1N + at least 1x8, or the accepted
+        # swap exception 2Z + 1N (e == 0, z >= 2). A day that is neither is a
+        # violation. Caps mirror the model (8h <= 1 + extra_day_cap - extra 8-Z-N
+        # blocks carry the hours; Z <= 2 + extra_day_cap once swapped,
         # N <= 1 + extra_night_cap).
         for day in dates:
             z = by_day_shift.get((day, Shift.DAY), [])
@@ -224,9 +233,10 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
             if zc < 1:
                 V(Issue("violation", "coverage_day",
                         f"{day}: nicio infirmieră de zi (Z); cel puțin una este obligatorie în fiecare zi.", date=day))
-            if ec > 1:
+            if ec > 1 + cfg.extra_day_cap:
                 V(Issue("violation", "coverage_eight",
-                        f"{day}: {ec} ture de opt ore; este permisă cel mult una.", date=day))
+                        f"{day}: {ec} ture de opt ore depășesc plafonul de {1 + cfg.extra_day_cap}.",
+                        date=day))
             # neither 1Z+1N+1x8 nor 2Z+1N: the day slot is unfilled
             if ec + min(zc, 2) < 2:
                 V(Issue("violation", "coverage_eight",
@@ -332,6 +342,70 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
                         f"{n.name}: doar {t.worked_weekend}h la 100% (weekend/sărbători); minimul "
                         f"lunar este {cfg.weekend_floor}h pentru fiecare asistentă/infirmieră.",
                         nurse_id=n.id))
+
+    # --- infirmiere work blocks: 8 -> Z -> N on three consecutive days -------
+    # Mirrors the model (decided 2026-11-18): an 8 is followed by a Z, a Z by an
+    # N, and an N is preceded by a Z. A link is waived only where the neighbouring
+    # day is off for leave (Co, a Co-bridged weekend, the no-night eve of a Co) or
+    # lies outside the month - the next month checks its own start against the
+    # tail; with no previous schedule at all the month's first day is a cut. A Z
+    # with no 8 the day before is the tolerated block break, but only on a 2Z+1N
+    # swap day or the day after one (a warning); anywhere else it is a violation.
+    if is_aide:
+        first, last = dates[0], dates[-1]
+        has_tail = bool(inp.prev_tail)
+        prev_day = first - dt.timedelta(days=1)
+        swap_days = {d for d, c in report.per_day.items() if c["E8"] == 0 and c["Z"] >= 2}
+        if has_tail and not any(t.get(prev_day) is Shift.EIGHT for t in inp.prev_tail.values()):
+            swap_days.add(prev_day)
+        for n in inp.nurses:
+            away = inp.leave_of(n.id) | blocked_by_nurse[n.id]
+            no_night = no_night_by_nurse[n.id]
+            for day in [prev_day, *dates]:
+                today = shift_on(n.id, day)
+                nxt = day + dt.timedelta(days=1)
+                if today is None or nxt > last or nxt in away:
+                    continue
+                if today is Shift.EIGHT and shift_on(n.id, nxt) is not Shift.DAY:
+                    V(Issue("violation", "aide_block",
+                            f"{n.name}: tura de 8h din {day} nu este urmată de tura de zi (Z) pe {nxt} - "
+                            f"infirmierele lucrează în blocuri 8-Z-N, trei zile la rând.",
+                            nurse_id=n.id, date=nxt))
+                elif today is Shift.TOPUP and shift_on(n.id, nxt) is Shift.EIGHT:
+                    V(Issue("violation", "aide_block",
+                            f"{n.name}: completarea din {day} este lipită de blocul 8-Z-N care începe pe "
+                            f"{nxt} - ar ieși peste {cfg.max_consec_aide} zile lucrate la rând.",
+                            nurse_id=n.id, date=nxt))
+                elif (today is Shift.DAY and nxt not in no_night
+                      and shift_on(n.id, nxt) is not Shift.NIGHT):
+                    V(Issue("violation", "aide_block",
+                            f"{n.name}: tura de zi din {day} nu este urmată de tura de noapte (N) pe {nxt} - "
+                            f"infirmierele lucrează în blocuri 8-Z-N, trei zile la rând.",
+                            nurse_id=n.id, date=nxt))
+            for day in dates:
+                today = shift_on(n.id, day)
+                prv = day - dt.timedelta(days=1)
+                if today not in (Shift.DAY, Shift.NIGHT) or prv in away:
+                    continue
+                if prv < first and not has_tail:
+                    continue
+                before = shift_on(n.id, prv)
+                if today is Shift.NIGHT and before is not Shift.DAY:
+                    V(Issue("violation", "aide_block",
+                            f"{n.name}: tura de noapte din {day} nu vine după o tură de zi (Z) - "
+                            f"infirmierele lucrează în blocuri 8-Z-N, trei zile la rând.",
+                            nurse_id=n.id, date=day))
+                elif today is Shift.DAY and before is not Shift.EIGHT:
+                    if day in swap_days or prv in swap_days:
+                        W(Issue("warning", "aide_block_break",
+                                f"{n.name}: tura de zi din {day} nu vine după o tură de 8h - bloc 8-Z-N "
+                                f"întrerupt de excepția 2 Z + 1 N (permis, de evitat).",
+                                nurse_id=n.id, date=day))
+                    else:
+                        V(Issue("violation", "aide_block",
+                                f"{n.name}: tura de zi din {day} nu vine după o tură de 8h - infirmierele "
+                                f"lucrează în blocuri 8-Z-N, trei zile la rând.",
+                                nurse_id=n.id, date=day))
 
     # --- infirmiere run cap: no run of worked days longer than max_consec_aide ---
     # Walks each aide's worked days from two days before the month (prev tail) to

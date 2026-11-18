@@ -49,10 +49,15 @@ def test_leave_lowers_weekend_hours_but_stays_moderate():
     assert max(noco) - min(co) <= 32, (noco, co)
 
 
-def test_more_leave_is_never_more_weekend_hours():
+def test_more_leave_is_never_much_more_weekend_hours():
     w = solve_oct(LEAVE)
     # id 6 has the most Co (9 days), id 1 the least among leave-takers (5).
-    assert w[6] <= w[1], (w[6], w[1])
+    # Since 2026-11-18 infirmiere work in rigid 8-Z-N blocks, so weekend hours come
+    # in lumps and exact ordering would cost hour targets (the optimum gives id 6
+    # 42h vs id 1 32h). The leave-heavy aide still stays below every full-month
+    # aide, and within one 12h shift of the lighter leave-taker.
+    assert w[6] < min(w[i] for i in NOCO_IDS), w
+    assert w[6] - w[1] <= 12, (w[6], w[1])
 
 
 def test_leave_free_month_shares_weekend_evenly():
