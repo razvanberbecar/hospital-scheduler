@@ -39,7 +39,11 @@ def max_nights_fitting(inp: ScheduleInput, nurse: Nurse, holidays: set[dt.date])
 
     The eve of a Co day counts as unavailable too: this function places nights
     only, and a night there would run into her leave.
+
+    Infirmiere work in 8-Z-N blocks with 48h off after the night (decided
+    2026-11-18), so their nights are at least five days apart.
     """
+    stride = 5 if inp.staff_type == STAFF_AIDE else 3
     dates = cal.month_dates(inp.year, inp.month)
     unavailable = (inp.unavailable_of(nurse.id, holidays)
                    | _blocked_first_days(inp, nurse.id)
@@ -49,7 +53,7 @@ def max_nights_fitting(inp: ScheduleInput, nurse: Nurse, holidays: set[dt.date])
     while i < len(dates):
         if dates[i] not in unavailable:
             count += 1
-            i += 3  # the night + two mandatory free days
+            i += stride  # the night + two free days (+ the next block's 8 and Z)
         else:
             i += 1
     return count
@@ -92,12 +96,14 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
     # --- roster structure -------------------------------------------------
     if is_aide:
         # Infirmiere: no head, no sections, no kitchen. Daily coverage needs
-        # 1 Z + 1 N + 1 x 8h, and the night rest rule keeps a night worker off
-        # the next two days, so a workable pool is a few people.
-        if len(workers) < 3:
+        # 1 Z + 1 N + 1 x 8h, and each of those three opens or continues an 8-Z-N
+        # block whose night is followed by 48h off - so the aides of the previous
+        # two nights are resting: five distinct people every day.
+        if len(workers) < 5:
             issues.append(Issue("error", "roster_size",
-                                f"Acoperirea infirmierelor necesită cel puțin 3 persoane pe zi (1 zi + 1 noapte + 1 × 8h); "
-                                f"pe grafic sunt doar {len(workers)}."))
+                                f"Infirmierele lucrează în blocuri 8-Z-N urmate de 48h de pauză: în fiecare zi "
+                                f"sunt 3 la lucru (1 × 8h + 1 zi + 1 noapte) și 2 în pauză, deci e nevoie de "
+                                f"cel puțin 5; pe grafic sunt doar {len(workers)}."))
     else:
         if len(heads) > 1:
             issues.append(Issue("error", "head_count",
@@ -202,10 +208,12 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
     required_worked = sum(inp.effective_target(n.id) - 8 * len(inp.leave_of(n.id)) for n in workers)
     if is_aide:
         floor_hours = 32 * days
-        # A day absorbs the most hours fully swapped (Z up to 2+cap, no 8h slot:
-        # the 8h and the swap-maxed Z never coexist); top-ups add <=8h per aide.
-        ceiling_hours = ((2 + cfg.extra_day_cap) * 12 + (1 + cfg.extra_night_cap) * 12) * days \
-            + 8 * len(workers)
+        # A day absorbs the most hours either with every extra 8-Z-N block (8h
+        # and Z both up to 1+cap) or fully swapped (Z up to 2+cap, no 8h at all);
+        # top-ups add <=8h per aide.
+        per_day = max((1 + cfg.extra_day_cap) * (8 + 12),
+                      (2 + cfg.extra_day_cap) * 12) + (1 + cfg.extra_night_cap) * 12
+        ceiling_hours = per_day * days + 8 * len(workers)
     else:
         floor_hours = 56 * days
         # asistente day shifts cap at 4 (they carry the surplus), nights at exactly
@@ -229,7 +237,14 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
         # prev-tail block can overlap and must not be subtracted twice.
         off_limits = inp.unavailable_of(n.id, holidays) | _blocked_first_days(inp, n.id)
         available_days = sum(1 for d in dates if d not in off_limits)
-        if available_days * 12 + cfg.band < required:
+        if is_aide:
+            most = _aide_max_hours(dates, off_limits)
+            if most + cfg.band < required:
+                issues.append(Issue("error", "nurse_unreachable",
+                                    f"{n.name}: are nevoie de {required}h lucrate, dar în blocuri 8-Z-N cu 48h de "
+                                    f"pauză zilele ei disponibile dau cel mult {most}h. Ținta nu poate fi atinsă "
+                                    f"nici cu marja de ±{cfg.band}h.", nurse_id=n.id))
+        elif available_days * 12 + cfg.band < required:
             issues.append(Issue("error", "nurse_unreachable",
                                 f"{n.name}: are nevoie de {required}h lucrate, dar doar {available_days} zile disponibile "
                                 f"(maxim {available_days * 12}h). Ținta nu poate fi atinsă nici cu marja de ±{cfg.band}h.",
@@ -271,6 +286,22 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
     # --- shift requests -------------------------------------------------------
     issues.extend(effective_requests(inp)[1])
     return issues
+
+
+def _aide_max_hours(dates: list[dt.date], off_limits: set[dt.date]) -> int:
+    """Upper bound on an infirmiera's worked hours: within each stretch of
+    available days she can fit full 8-Z-N blocks (32h) every five days, and the
+    leftover days at most a cut block (1 day: one 12h shift, 2: Z+N, 3-4: a full
+    block); a top-up adds at most 8h once a month."""
+    leftover = (0, 12, 24, 32, 32)
+    total, run = 0, 0
+    for d in [*dates, None]:
+        if d is not None and d not in off_limits:
+            run += 1
+            continue
+        total += 32 * (run // 5) + leftover[run % 5]
+        run = 0
+    return total + 8
 
 
 def _runs(indices: list[int]) -> list[list[int]]:
@@ -440,7 +471,7 @@ def effective_requests(inp: ScheduleInput) -> tuple[list[ShiftRequest], list[Iss
     # infirmiere (at most one), but for asistente it is request-only and per-nurse
     # independent, so any number can be requested on the same day.
     cap = {"Z": 2 + cfg.extra_day_cap, "N": 2 + cfg.extra_night_cap, "K": 1,
-           "8": 1 if inp.staff_type == STAFF_AIDE else len(inp.nurses)}
+           "8": 1 + cfg.extra_day_cap if inp.staff_type == STAFF_AIDE else len(inp.nurses)}
     if inp.staff_type != STAFF_AIDE:
         # asistente: day capped at 4 (days carry the surplus), night exactly 2/day.
         cap["N"] = 2
@@ -451,10 +482,31 @@ def effective_requests(inp: ScheduleInput) -> tuple[list[ShiftRequest], list[Iss
     by_nurse: dict[int, dict[dt.date, str]] = {}
     for r in hards:
         by_nurse.setdefault(r.nurse_id, {})[r.date] = r.kind
+    is_aide = inp.staff_type == STAFF_AIDE
     for nid, day_map in by_nurse.items():
         name = by_id[nid].name
         for day, kind in day_map.items():
             nxt1 = day_map.get(day + dt.timedelta(days=1))
+            nxt2 = day_map.get(day + dt.timedelta(days=2))
+            if is_aide:
+                # 8-Z-N blocks with 48h off after the night (decided 2026-11-18)
+                if kind == "8" and nxt1 not in (None, "Z"):
+                    issues.append(Issue("error", "request_block",
+                                        f"{name}: după o tură de 8h obligatorie pe {day} urmează obligatoriu tura "
+                                        f"de zi (bloc 8-Z-N), nu {nxt1}.", nid, day))
+                elif kind == "Z" and nxt1 not in (None, "N"):
+                    issues.append(Issue("error", "request_block",
+                                        f"{name}: după o tură de zi obligatorie pe {day} urmează obligatoriu tura "
+                                        f"de noapte (bloc 8-Z-N), nu {nxt1}.", nid, day))
+                elif kind == "N" and nxt1 not in (None, "FREE"):
+                    issues.append(Issue("error", "request_rest",
+                                        f"{name}: o noapte obligatorie pe {day} necesită 48h de odihnă - cererea "
+                                        f"obligatorie din ziua următoare nu poate fi respectată.", nid, day))
+                elif kind == "N" and nxt2 not in (None, "FREE"):
+                    issues.append(Issue("error", "request_rest",
+                                        f"{name}: o noapte obligatorie pe {day} necesită 48h de odihnă - cererea "
+                                        f"obligatorie de peste două zile nu poate fi respectată.", nid, day))
+                continue
             if kind == "N" and nxt1 not in (None, "FREE"):
                 # Flat 16h rule (both staff types, decided 2026-10-18): only the
                 # next day is the hard 24h floor; the second day after a night is

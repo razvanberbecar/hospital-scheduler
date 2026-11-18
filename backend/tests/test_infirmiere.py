@@ -1,8 +1,11 @@
 """Solver + validator tests for the infirmiere staff type (plan 2026-07-14).
 
 Infirmiere are scheduled separately from nurses: no sections, no kitchen, no
-head. Daily coverage is 1 Z + 1 N + 1 x 8h, with a penalized swap exception to
-2 Z + 1 N used only when leave/hour targets force it.
+head. Daily coverage is 1 Z + 1 N + at least 1 x 8h, with a penalized swap
+exception to 2 Z + 1 N used only when leave/hour targets force it. Since
+2026-11-18 an infirmiera works only in 8 -> Z -> N blocks on three consecutive
+days, followed by 48h off; extra hours come from extra blocks (several 8h
+shifts on a day).
 """
 from __future__ import annotations
 
@@ -46,15 +49,43 @@ def test_infirmiere_solves_and_is_clean(july_aides):
 
 
 def test_infirmiere_daily_coverage_one_z_one_n_one_eight(july_aides):
-    """The unconstrained happy path fields 1 N, at least 1 Z and exactly one 8h
-    slot every day (extra hours spill into extra Z/N within the caps, never a
+    """The unconstrained happy path fields at least 1 N, 1 Z and one 8h shift
+    every day (extra hours come as extra 8-Z-N blocks within the caps, never a
     swap). No day drops below the 1Z+1N+1x8 minimum."""
     inp, res = july_aides
     report = validate(inp, res.assignments)
     for day, c in report.per_day.items():
         assert c["N"] >= 1, (day, c)
         assert c["Z"] >= 1, (day, c)
-        assert c["E8"] == 1, (day, c)   # 8h slot filled, no swap
+        assert 1 <= c["E8"] <= 1 + inp.config.extra_day_cap, (day, c)  # no swap
+    # the hours above the daily minimum really come from extra blocks
+    assert any(c["E8"] > 1 for c in report.per_day.values())
+
+
+def test_infirmiere_work_only_in_8_z_n_blocks(july_aides):
+    """Every shift of every aide sits in an 8 -> Z -> N run on consecutive days,
+    and the two days after each night are free (48h). Top-ups (T) stand alone.
+    The month has no previous schedule, so a block cut by the 1st is allowed."""
+    inp, res = july_aides
+    report = validate(inp, res.assignments)
+    assert not {"aide_block", "rest_after_night_48h"} & _codes(report.violations)
+    assert "aide_block_break" not in _codes(report.warnings)
+    grid = {(a.nurse_id, a.date): a.shift for a in res.assignments}
+    dates = cal.month_dates(2026, 7)
+    nxt = {Shift.EIGHT: Shift.DAY, Shift.DAY: Shift.NIGHT}
+    for n in inp.nurses:
+        for i, day in enumerate(dates):
+            s = grid.get((n.id, day))
+            if s in nxt and i + 1 < len(dates):
+                assert grid.get((n.id, dates[i + 1])) is nxt[s], (n.id, day, s)
+            if s is Shift.NIGHT:
+                for k in (1, 2):
+                    if i + k < len(dates):
+                        assert (n.id, dates[i + k]) not in grid, (n.id, day)
+                if i > 0:
+                    assert grid.get((n.id, dates[i - 1])) is Shift.DAY, (n.id, day)
+            if s is Shift.DAY and i > 0:
+                assert grid.get((n.id, dates[i - 1])) is Shift.EIGHT, (n.id, day)
 
 
 def test_infirmiere_no_swap_days_when_unconstrained(july_aides):
@@ -118,29 +149,39 @@ def test_hard_eight_request_pins_the_8h_slot_for_an_infirmiera():
 
 
 def test_infirmiere_swap_used_only_under_pressure():
-    """Under pressure the solver reaches for the 2Z+1N swap. With the day/night
-    caps clamped to the minimum (extra_day_cap = extra_night_cap = 0) a day can
-    hold at most 1Z+1N+1x8 = 32h, so 6 infirmiere at 184h each (1104h) cannot be
-    placed without converting some 8h slots to a second Z. The result stays valid
-    and every day still satisfies the swap-coverage rule e + min(z,2) >= 2."""
-    inp = aide_input(nurses=aides(6), base_target=184,
-                     config=Config(seed=7, max_time_s=90.0,
-                                   extra_day_cap=0, extra_night_cap=0))
+    """The 2Z+1N swap is still the escape hatch when no aide can take the day's
+    8h shift. Seven aides; on July 15 three are on Co and two are pinned (locked)
+    to a day shift. Of the other two, one must work that night and the other the
+    night before (the Co aides cannot take the eve of their leave), so she rests
+    on the 15th - nobody can open a block with an 8h. The solver swaps that day
+    and the month still validates clean (any Z left without its 8 is only a
+    tolerated block-break warning)."""
+    day = dt.date(2026, 7, 15)
+    locks = [Assignment(nid, day, Shift.DAY, 12,
+                        *cal.shift_hours(day, Shift.DAY, 12, JULY_HOLIDAYS, STAFF_AIDE))
+             for nid in (1, 2)]
+    inp = aide_input(nurses=aides(7), leave={5: {day}, 6: {day}, 7: {day}}, locks=locks,
+                     config=Config(seed=7, max_time_s=60.0))
     res = solve(inp)
     assert res.ok, (res.status, res.diagnosis, [i.message for i in res.prechecks])
     report = validate(inp, res.assignments)
     assert report.ok, [v.message for v in report.violations]
+    assert report.per_day[day]["E8"] == 0 and report.per_day[day]["Z"] >= 2
     swap_days = [d for d, c in report.per_day.items() if c["E8"] == 0]
-    assert swap_days, "expected the solver to use the 2Z+1N swap under pressure"
-    for day, c in report.per_day.items():
+    assert swap_days == [day]   # only where forced
+    for d, c in report.per_day.items():
         # each day is 1Z+1N+1x8 or the accepted 2Z+1N exception
-        assert c["N"] >= 1 and c["E8"] + min(c["Z"], 2) >= 2, (day, c)
+        assert c["N"] >= 1 and c["E8"] + min(c["Z"], 2) >= 2, (d, c)
 
 
 def test_infirmiere_determinism_same_seed():
     cfg = dict(year=2026, month=7, base_target=184, nurses=aides(8), staff_type=STAFF_AIDE)
-    a = solve(ScheduleInput(**cfg, config=Config(seed=123, max_time_s=60.0, workers=1)))
-    b = solve(ScheduleInput(**cfg, config=Config(seed=123, max_time_s=60.0, workers=1)))
+    # A single worker does not prove optimality on the 8-Z-N block model within a
+    # wall-clock limit, and where a wall-clock stop lands depends on CPU load; a
+    # deterministic-time budget stops both runs at the same point.
+    det = dict(seed=123, max_time_s=600.0, max_det_time=10.0, workers=1)
+    a = solve(ScheduleInput(**cfg, config=Config(**det)))
+    b = solve(ScheduleInput(**cfg, config=Config(**det)))
     assert a.ok and b.ok
     assert a.assignments == b.assignments
 
@@ -251,3 +292,103 @@ def test_validator_allows_eight_shift_on_nurse_schedule():
     inp = ScheduleInput(2026, 7, 184, DEMO_NURSES)  # default staff_type = nurse
     report = validate(inp, [Assignment(1, day, Shift.EIGHT, 8, 8, 0)])
     assert "shift_not_allowed" not in _codes(report.violations)
+
+
+# --- 8-Z-N blocks + 48h (decided 2026-11-18) -------------------------------
+
+def _a(nid, day, shift):
+    dur = cal.duration_of(shift)
+    return Assignment(nid, day, shift, dur,
+                      *cal.shift_hours(day, shift, dur, JULY_HOLIDAYS, STAFF_AIDE))
+
+
+MON = dt.date(2026, 7, 6)
+
+
+def _days(k):
+    return MON + dt.timedelta(days=k)
+
+
+def _block_issues(assignments, **kw):
+    report = validate(aide_input(**kw), assignments)
+    return ({(v.nurse_id, v.date) for v in report.violations if v.code == "aide_block"},
+            _codes(report.warnings))
+
+
+def test_validator_accepts_a_full_block():
+    blk = [_a(1, _days(0), Shift.EIGHT), _a(1, _days(1), Shift.DAY), _a(1, _days(2), Shift.NIGHT)]
+    assert _block_issues(blk)[0] == set()
+
+
+@pytest.mark.parametrize("pattern", [
+    [Shift.EIGHT, None, Shift.DAY],             # 8, free, Z ...  (the pattern to forbid)
+    [Shift.EIGHT, Shift.NIGHT],                 # 8 then N
+    [Shift.DAY, None],                          # Z not followed by N
+    [None, Shift.NIGHT],                        # N not after a Z
+    [None, Shift.DAY, Shift.NIGHT],             # Z without the block's 8 (no swap day)
+])
+def test_validator_rejects_a_broken_block(pattern):
+    shifts = [_a(1, _days(k), s) for k, s in enumerate(pattern) if s is not None]
+    assert _block_issues(shifts)[0], pattern
+
+
+def test_validator_tolerates_block_cut_by_leave_and_month_end():
+    # 8 then Co: the block is cut by leave - no aide_block
+    cut = [_a(1, _days(0), Shift.EIGHT)]
+    assert _block_issues(cut, leave={1: {_days(1)}})[0] == set()
+    # back from Co straight onto Z, N
+    back = [_a(1, _days(1), Shift.DAY), _a(1, _days(2), Shift.NIGHT)]
+    assert _block_issues(back, leave={1: {_days(0)}})[0] == set()
+    # 8 on the 30th, Z on the 31st: the night follows next month
+    end = [_a(1, dt.date(2026, 7, 30), Shift.EIGHT), _a(1, dt.date(2026, 7, 31), Shift.DAY)]
+    assert _block_issues(end)[0] == set()
+
+
+def test_validator_checks_the_block_across_the_month_start():
+    tail = {1: {dt.date(2026, 6, 30): Shift.EIGHT}, 2: {dt.date(2026, 6, 30): Shift.DAY}}
+    d1, d2 = dt.date(2026, 7, 1), dt.date(2026, 7, 2)
+    good = [_a(1, d1, Shift.DAY), _a(1, d2, Shift.NIGHT), _a(2, d1, Shift.NIGHT)]
+    assert _block_issues(good, prev_tail=tail)[0] == set()
+    bad = [_a(2, d1, Shift.DAY)]   # tail Z must continue with N, aide 1 must do Z
+    assert {(1, d1), (2, d1)} <= _block_issues(bad, prev_tail=tail)[0]
+
+
+def test_validator_reports_a_swap_block_break_as_a_warning():
+    """On a 2Z+1N day the second Z has no 8 before it: a tolerated break."""
+    day = _days(3)
+    assignments = [
+        _a(1, _days(2), Shift.EIGHT), _a(1, day, Shift.DAY), _a(1, _days(4), Shift.NIGHT),
+        _a(2, day, Shift.DAY), _a(2, _days(4), Shift.NIGHT),
+        _a(3, _days(1), Shift.EIGHT), _a(3, _days(2), Shift.DAY), _a(3, day, Shift.NIGHT),
+    ]
+    blocks, warnings = _block_issues(assignments)
+    assert (2, day) not in blocks
+    assert "aide_block_break" in warnings
+
+
+def test_validator_allows_several_eights_up_to_the_cap():
+    inp = aide_input()
+    cap = 1 + inp.config.extra_day_cap
+    def eight_issues(e):
+        report = validate(inp, _day_assignments(MON, z=1, n=1, e=e))
+        return {v.code for v in report.violations if v.date == MON}
+    assert "coverage_eight" not in eight_issues(cap)
+    assert "coverage_eight" in eight_issues(cap + 1)
+
+
+def test_solver_continues_a_block_from_the_previous_month():
+    """A block opened on June 30 (8h) carries into July: Z on the 1st, N on the
+    2nd; an aide whose June ended on a night stays off July 1-2 (48h)."""
+    tail = {1: {dt.date(2026, 6, 30): Shift.EIGHT},
+            2: {dt.date(2026, 6, 29): Shift.EIGHT, dt.date(2026, 6, 30): Shift.DAY},
+            3: {dt.date(2026, 6, 29): Shift.DAY, dt.date(2026, 6, 30): Shift.NIGHT}}
+    inp = aide_input(prev_tail=tail, config=Config(seed=7, max_time_s=30.0))
+    res = solve(inp)
+    assert res.ok, (res.status, res.diagnosis, [i.message for i in res.prechecks])
+    grid = {(a.nurse_id, a.date): a.shift for a in res.assignments}
+    d1, d2 = dt.date(2026, 7, 1), dt.date(2026, 7, 2)
+    assert grid.get((1, d1)) is Shift.DAY and grid.get((1, d2)) is Shift.NIGHT
+    assert grid.get((2, d1)) is Shift.NIGHT
+    assert (3, d1) not in grid and (3, d2) not in grid
+    report = validate(inp, res.assignments)
+    assert report.ok, [v.message for v in report.violations]

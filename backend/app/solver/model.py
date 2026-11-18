@@ -194,15 +194,28 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
                 # hard 24h floor: the day after a night is never worked
                 for other in day_vars(n.id, di + 1):
                     m.AddAtMostOne([nd, other])
+            if is_aide and nd is not None and di + 2 < D:
+                # infirmiere (decided 2026-11-18): the night closes the 8-Z-N
+                # block and is followed by 48h off, so the second day is free too
+                for other in day_vars(n.id, di + 2):
+                    m.AddAtMostOne([nd, other])
 
     # previous-month tail blocks (rest rules across the boundary)
     first = dates[0]
     for n in workers:
         tail = inp.prev_tail.get(n.id, {})
         last_prev = tail.get(first - dt.timedelta(days=1))
+        second_prev = tail.get(first - dt.timedelta(days=2))
         if last_prev is Shift.NIGHT:
-            # day 0 is the hard 24h floor; the second day (day 1) is freely
-            # workable under the flat 16h rule, so nothing else is pinned.
+            # day 0 is the hard 24h floor; for asistente the second day (day 1)
+            # is freely workable under the flat 16h rule. Infirmiere take 48h off
+            # after the night, so their day 1 is blocked as well.
+            for v in day_vars(n.id, 0):
+                m.Add(v == 0)
+            if is_aide and D > 1:
+                for v in day_vars(n.id, 1):
+                    m.Add(v == 0)
+        if is_aide and second_prev is Shift.NIGHT:
             for v in day_vars(n.id, 0):
                 m.Add(v == 0)
         if last_prev is Shift.DAY:
@@ -212,24 +225,112 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
                 if other is not None:
                     m.Add(other == 0)
 
+    # --- infirmiere work blocks: 8 -> Z -> N on three consecutive days ----------
+    # Decided 2026-11-18: an aide works only in blocks of 8h, day, night on three
+    # days in a row, then 48h off (the rest rules above). So an 8 is followed by
+    # a Z, a Z by an N, and an N is preceded by a Z. A link is waived only where
+    # the neighbouring day cannot hold that shift because of leave (Co, a
+    # Co-bridged weekend, the no-night eve of a Co) or lies across the month edge
+    # - a block may be cut short by leave or by the month boundary, nothing else.
+    # Across the start of the month the previous month's tail is authoritative;
+    # with no previous schedule at all (inp.prev_tail empty) the first days are
+    # treated as a cut. A Z not preceded by an 8 is the one tolerated break, and
+    # only around a 2Z+1N swap day (its second Z, and the Z of the next day, which
+    # has no 8 to follow - tied to the swap vars under coverage below); each is
+    # penalised by w_aide_block_break.
+    block_break: list[cp_model.IntVar] = []
+    breaks_by_day: dict[int, list[cp_model.IntVar]] = {}
+    if is_aide:
+        has_tail = bool(inp.prev_tail)
+        for n in workers:
+            away = inp.unavailable_of(n.id, holidays)
+            tail = inp.prev_tail.get(n.id, {})
+            tail_last = tail.get(first - dt.timedelta(days=1))
+            for di in range(D):
+                ed = x.get((n.id, di, Shift.EIGHT))
+                zd = x.get((n.id, di, Shift.DAY))
+                nd = x.get((n.id, di, Shift.NIGHT))
+                # forward: 8 -> Z next day, Z -> N next day
+                if di + 1 < D:
+                    z_next = x.get((n.id, di + 1, Shift.DAY))
+                    n_next = x.get((n.id, di + 1, Shift.NIGHT))
+                    if ed is not None and z_next is not None:
+                        m.Add(z_next >= ed)
+                    if zd is not None and n_next is not None:
+                        m.Add(n_next >= zd)
+                # backward: N needs a Z the day before, Z needs an 8 (or a break)
+                if di == 0:
+                    if has_tail:
+                        if nd is not None and tail_last is not Shift.DAY:
+                            m.Add(nd == 0)
+                        if zd is not None and tail_last is not Shift.EIGHT:
+                            br = m.NewBoolVar(f"blkbrk_{n.id}_{di}")
+                            m.Add(zd <= br)
+                            block_break.append(br)
+                            breaks_by_day.setdefault(di, []).append(br)
+                    continue
+                z_prev = x.get((n.id, di - 1, Shift.DAY))
+                e_prev = x.get((n.id, di - 1, Shift.EIGHT))
+                prev_away = dates[di - 1] in away
+                if nd is not None and not prev_away:
+                    m.Add(nd <= (z_prev if z_prev is not None else 0))
+                if zd is not None and not prev_away:
+                    br = m.NewBoolVar(f"blkbrk_{n.id}_{di}")
+                    m.Add(zd <= (e_prev if e_prev is not None else 0) + br)
+                    block_break.append(br)
+                    breaks_by_day.setdefault(di, []).append(br)
+            # a top-up may not sit right before a block's 8: the block's three
+            # days would make it a 4-day run (the run cap), and when the 8 falls
+            # on the month's last day the next month could not avoid that run
+            for di in range(D):
+                ed = x.get((n.id, di, Shift.EIGHT))
+                if ed is None:
+                    continue
+                if di == 0:
+                    if tail_last is Shift.TOPUP:
+                        m.Add(ed == 0)
+                    continue
+                for tv in (t4.get((n.id, di - 1)), t8.get((n.id, di - 1))):
+                    if tv is not None:
+                        m.AddAtMostOne([tv, ed])
+            # the previous month's block continues into day 0 (and day 1)
+            if tail_last is Shift.EIGHT and (v := x.get((n.id, 0, Shift.DAY))) is not None:
+                m.Add(v == 1)
+            if tail_last is Shift.DAY and (v := x.get((n.id, 0, Shift.NIGHT))) is not None:
+                m.Add(v == 1)
+
     # --- coverage -------------------------------------------------------------
     swap_terms: list[cp_model.IntVar] = []
     night_section_exc: list[cp_model.IntVar] = []  # asistente 2+0/0+2 nights
     if is_aide:
-        # Infirmiere daily coverage (HARD): 1 Z + 1 N + 1 x 8h. The swap exception
-        # (penalized) turns the 8h slot into a second Z -> 2 Z + 1 N, used only when
-        # leave/hour targets force it.
+        # Infirmiere daily coverage (HARD): 1 Z + 1 N + at least 1 x 8h. Every 8h
+        # opens an 8-Z-N block, so the hours beyond the daily minimum come from
+        # extra blocks - extra 8h shifts (capped like the extra Z), which turn into
+        # extra Z and N on the next two days (decided 2026-11-18; before that the
+        # 8h slot was exactly one and the surplus went to loose Z/N). The swap
+        # exception (penalized) drops the 8h shifts for a second Z -> 2 Z + 1 N,
+        # used only when leave/hour targets force it.
         for di, day in enumerate(dates):
             zvars = [x[k] for n in workers if (k := (n.id, di, Shift.DAY)) in x]
             nvars = [x[k] for n in workers if (k := (n.id, di, Shift.NIGHT)) in x]
             evars = [x[k] for n in workers if (k := (n.id, di, Shift.EIGHT)) in x]
             swap = m.NewBoolVar(f"swap_{di}")
-            m.Add(sum(evars) == 1 - swap)
+            m.Add(sum(evars) >= 1 - swap)
+            m.Add(sum(evars) <= (1 + cfg.extra_day_cap) * (1 - swap))
             m.Add(sum(zvars) >= 1 + swap)
             m.Add(sum(nvars) >= 1)
             m.Add(sum(zvars) <= 1 + swap + cfg.extra_day_cap)
             m.Add(sum(nvars) <= 1 + cfg.extra_night_cap)
             swap_terms.append(swap)
+        # A block break (a Z with no 8 the day before) is allowed only on a swap
+        # day or the day after one. The previous month's last day counts as a
+        # swap when its tail shows nobody on the 8h shift.
+        last_prev_day = first - dt.timedelta(days=1)
+        prev_swap = 1 if inp.prev_tail and not any(
+            t.get(last_prev_day) is Shift.EIGHT for t in inp.prev_tail.values()) else 0
+        for di, brs in breaks_by_day.items():
+            near_swap = swap_terms[di] + (swap_terms[di - 1] if di > 0 else prev_swap)
+            m.Add(sum(brs) <= len(brs) * near_swap)
     else:
         # Day (Z): one per section is the rule (2/day), but everyone reaching the
         # monthly target forces 3-4 Z on most days (nights are fixed at 2, so days
@@ -443,13 +544,16 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
             ec = m.NewIntVar(0, D, f"ecnt_{n.id}")
             m.Add(ec == sum(ev))
             eight_of[n.id] = ec
-        etot = m.NewIntVar(0, D, "eight_total")
+        # several 8h shifts a day since the 8-Z-N blocks (extra blocks carry the
+        # hours), so the month total is bounded by the daily cap, not by D
+        ETOT = D * (1 + cfg.extra_day_cap)
+        etot = m.NewIntVar(0, ETOT, "eight_total")
         m.Add(etot == sum(eight_of[n.id] for n in workers))
         for n in workers:
             # fair share = etot * share/S; penalise |S*eights - share*etot|
-            g = m.NewIntVar(-S * D, S * D, f"efair_{n.id}")
+            g = m.NewIntVar(-S * ETOT, S * ETOT, f"efair_{n.id}")
             m.Add(g == S * eight_of[n.id] - share[n.id] * etot)
-            ag = m.NewIntVar(0, S * D, f"efairabs_{n.id}")
+            ag = m.NewIntVar(0, S * ETOT, f"efairabs_{n.id}")
             m.AddAbsEquality(ag, g)
             objective_terms.append(cfg.w_eight_fair * ag)
 
@@ -472,10 +576,14 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
         objective_terms.append(W_HARD * sum(weekend_floor_slack))
     if aide_run_slack:
         objective_terms.append(W_HARD * sum(aide_run_slack))
+    if block_break:
+        objective_terms.append(cfg.w_aide_block_break * sum(block_break))
     m.Minimize(sum(objective_terms))
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = cfg.max_time_s
+    if cfg.max_det_time is not None:
+        solver.parameters.max_deterministic_time = cfg.max_det_time
     solver.parameters.random_seed = cfg.seed
     solver.parameters.num_search_workers = cfg.workers
     status = solver.Solve(m)
@@ -608,6 +716,12 @@ def _diagnose(inp: ScheduleInput, holidays: set[dt.date],
                 # day after a night carries no constraint for either staff type.
                 for s in (Shift.DAY, Shift.NIGHT, THIRD):
                     other = x.get((n.id, di + 1, s))
+                    if other is not None:
+                        m.AddAtMostOne([nd, other])
+            if is_aide and nd is not None and di + 2 < D:
+                # infirmiere: 48h off after the night that closes a block
+                for s in (Shift.DAY, Shift.NIGHT, THIRD):
+                    other = x.get((n.id, di + 2, s))
                     if other is not None:
                         m.AddAtMostOne([nd, other])
     slacks = []

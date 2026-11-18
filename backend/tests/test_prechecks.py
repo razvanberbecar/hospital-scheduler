@@ -1,9 +1,11 @@
 import datetime as dt
 
+import pytest
+
 from app.solver import calendar as cal
 from app.solver.cli import DEMO_NURSES
 from app.solver.domain import (BIG, SMALL, STAFF_AIDE, Assignment, Nurse,
-                                ScheduleInput, Shift)
+                                ScheduleInput, Shift, ShiftRequest)
 from app.solver.prechecks import has_errors, per_nurse_night_minimum, run_prechecks
 
 HOLIDAYS = cal.default_holidays(2026, 7)
@@ -159,3 +161,41 @@ def test_infirmiere_leave_crunch_is_an_error():
     leave = {i: {D8} for i in (1, 2, 3, 4)}  # 4 of 6 on Co -> 2 available
     inp = ScheduleInput(2026, 7, 184, aides, staff_type=STAFF_AIDE, leave=leave)
     assert "infirmiere_leave_crunch" in codes(run_prechecks(inp), "error")
+
+
+# --- infirmiere 8-Z-N blocks (decided 2026-11-18) ---------------------------
+
+def _aides(n):
+    return [Nurse(i, f"Inf{i}", section="") for i in range(1, n + 1)]
+
+
+def test_infirmiere_need_at_least_five():
+    """3 at work (8h, Z, N) + the 2 resting after the last two nights."""
+    four = ScheduleInput(2026, 7, 184, _aides(4), staff_type=STAFF_AIDE)
+    assert "roster_size" in codes(run_prechecks(four), "error")
+    five = ScheduleInput(2026, 7, 184, _aides(5), staff_type=STAFF_AIDE)
+    assert "roster_size" not in codes(run_prechecks(five), "error")
+
+
+@pytest.mark.parametrize("first,second,gap,code", [
+    ("8", "N", 1, "request_block"),     # an 8 must be followed by its Z
+    ("8", "FREE", 1, "request_block"),
+    ("Z", "FREE", 1, "request_block"),  # a Z must be followed by its N
+    ("N", "8", 2, "request_rest"),      # 48h after the night
+])
+def test_infirmiere_hard_requests_that_break_a_block(first, second, gap, code):
+    d = dt.date(2026, 7, 6)
+    reqs = [ShiftRequest(1, d, first, hard=True),
+            ShiftRequest(1, d + dt.timedelta(days=gap), second, hard=True)]
+    inp = ScheduleInput(2026, 7, 184, _aides(8), staff_type=STAFF_AIDE, requests=reqs)
+    assert code in codes(run_prechecks(inp), "error")
+
+
+def test_infirmiere_hard_block_requests_are_accepted():
+    d = dt.date(2026, 7, 6)
+    reqs = [ShiftRequest(1, d, "8", hard=True),
+            ShiftRequest(1, d + dt.timedelta(days=1), "Z", hard=True),
+            ShiftRequest(1, d + dt.timedelta(days=2), "N", hard=True),
+            ShiftRequest(1, d + dt.timedelta(days=5), "8", hard=True)]
+    inp = ScheduleInput(2026, 7, 184, _aides(8), staff_type=STAFF_AIDE, requests=reqs)
+    assert not {"request_block", "request_rest"} & codes(run_prechecks(inp), "error")
