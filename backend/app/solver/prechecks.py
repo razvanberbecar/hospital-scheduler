@@ -244,6 +244,19 @@ def run_prechecks(inp: ScheduleInput) -> list[Issue]:
                                     f"{n.name}: are nevoie de {required}h lucrate, dar în blocuri 8-Z-N cu 48h de "
                                     f"pauză zilele ei disponibile dau cel mult {most}h. Ținta nu poate fi atinsă "
                                     f"nici cu marja de ±{cfg.band}h.", nurse_id=n.id))
+            elif most < required:
+                issues.append(Issue("warning", "target_not_exact",
+                                    f"{n.name}: are nevoie de {required}h lucrate, dar în blocuri 8-Z-N cu 48h de "
+                                    f"pauză zilele ei disponibile dau cel mult {most}h - nu poate avea exact "
+                                    f"ținta lunii.", nurse_id=n.id))
+            target = inp.effective_target(n.id)
+            if target % 4:
+                # every infirmiere shift (8h, 12h, 4h/8h top-up) and the 8h Co
+                # credit is a multiple of 4h, so such a target can never be exact
+                issues.append(Issue("warning", "target_not_exact",
+                                    f"{n.name}: ținta de {target}h nu se împarte la 4, iar toate turele "
+                                    f"infirmierelor (8h, 12h, completări de 4h/8h) și creditul de Co sunt "
+                                    f"multipli de 4h - ținta nu poate fi atinsă exact.", nurse_id=n.id))
         elif available_days * 12 + cfg.band < required:
             issues.append(Issue("error", "nurse_unreachable",
                                 f"{n.name}: are nevoie de {required}h lucrate, dar doar {available_days} zile disponibile "

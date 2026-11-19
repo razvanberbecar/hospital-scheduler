@@ -117,6 +117,30 @@ def test_infirmiere_eight_shifts_are_balanced_across_aides():
     assert max(counts) - min(counts) <= 4, counts
 
 
+def test_infirmiere_hit_their_target_exactly(july_aides):
+    """Decided 2026-11-19: every infirmiera lands exactly on the month's hours
+    (w_dev_aide outranks fairness and the block exceptions), so the unconstrained
+    July has no deviation and no target_missed warning at all."""
+    inp, res = july_aides
+    for nid, t in res.totals.items():
+        assert t.owed == 0, (nid, t.total, t.effective_target)
+    assert "target_missed" not in _codes(validate(inp, res.assignments).warnings)
+
+
+def test_infirmiere_hit_their_target_exactly_with_leave():
+    """With Co the effective target shrinks per aide; still exact for everyone."""
+    holidays = cal.default_holidays(2026, 8)
+    wd = [d for d in cal.month_dates(2026, 8) if not cal.is_offday(d, holidays)]
+    inp = ScheduleInput(2026, 8, 184, aides(8), staff_type=STAFF_AIDE,
+                        leave={2: set(wd[0:10]), 5: set(wd[10:15])}, holidays=holidays,
+                        config=Config(seed=7, max_time_s=60.0))
+    res = solve(inp)
+    assert res.ok, (res.status, res.diagnosis, [i.message for i in res.prechecks])
+    assert validate(inp, res.assignments).ok
+    for nid, t in res.totals.items():
+        assert t.owed == 0, (nid, t.total, t.effective_target)
+
+
 def test_infirmiere_nights_min_and_band(july_aides):
     inp, res = july_aides
     for nid, t in res.totals.items():

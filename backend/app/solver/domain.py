@@ -112,6 +112,14 @@ class Config:
     workers: int = 8
     # objective weights, roughly an order of magnitude apart (priority list)
     w_dev: int = 1_000            # per hour of |target deviation|
+    # Infirmiere only: per hour of |target deviation|. Each infirmiera must land
+    # EXACTLY on her monthly target (decided 2026-11-19), so a missed hour costs
+    # as much as the hard floors (W_HARD in model.py) and outranks every soft
+    # term - weekend/8h fairness, top-ups, and the 2Z+1N swap and block breaks,
+    # which the owner accepts when they are what makes the hours exact. When a
+    # month is too tight for exact hours the solver gets as close as it can and
+    # the gap stays a warning (approval still allowed), as decided.
+    w_dev_aide: int = 100_000
     w_request: int = 500          # per denied request (below targets, above top-ups)
     w_topup: int = 300            # per top-up used
     # The 100%-bonus (weekend/holiday) hours are shared in proportion to how much
@@ -143,9 +151,10 @@ class Config:
     # followed by 48h off (decided 2026-11-18). A Z that is not preceded by the
     # block's 8h shift - the second Z of a 2Z+1N swap day, or the Z the day after a
     # swap day - is the one tolerated break of the block, allowed only around a
-    # swap day and penalised per occurrence. Deliberately above the band's worth of
-    # target deviation (12h x w_dev 1000/hour), so the solver breaks a block only
-    # when coverage or leave forces it, never to tune hours.
+    # swap day and penalised per occurrence. Well above the minor soft terms, but
+    # below an hour of target deviation (w_dev_aide): exact hours come first
+    # (decided 2026-11-19), so a block is broken when coverage, leave or the exact
+    # hour target forces it - never for fairness.
     w_aide_block_break: int = 20_000
     # Asistente only: cost per day+section where a section has no night nurse (the
     # 2+0 / 0+2 split). Nights are exactly 2/day and 1+1 across the two sections is
