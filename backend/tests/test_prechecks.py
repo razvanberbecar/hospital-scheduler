@@ -199,3 +199,14 @@ def test_infirmiere_hard_block_requests_are_accepted():
             ShiftRequest(1, d + dt.timedelta(days=5), "8", hard=True)]
     inp = ScheduleInput(2026, 7, 184, _aides(8), staff_type=STAFF_AIDE, requests=reqs)
     assert not {"request_block", "request_rest"} & codes(run_prechecks(inp), "error")
+
+
+def test_infirmiere_target_not_divisible_by_four_cannot_be_exact():
+    """Every infirmiere shift and the Co credit is a multiple of 4h, so a target
+    like 182h can never be hit exactly - warned up front (not an error)."""
+    odd = ScheduleInput(2026, 7, 182, _aides(8), staff_type=STAFF_AIDE)
+    issues = run_prechecks(odd)
+    assert "target_not_exact" in codes(issues, "warning")
+    assert "target_not_exact" not in codes(issues, "error")
+    even = ScheduleInput(2026, 7, 184, _aides(8), staff_type=STAFF_AIDE)
+    assert "target_not_exact" not in codes(run_prechecks(even))

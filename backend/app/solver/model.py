@@ -558,7 +558,9 @@ def solve(inp: ScheduleInput, skip_prechecks: bool = False) -> SolveResult:
             objective_terms.append(cfg.w_eight_fair * ag)
 
     # --- objective ------------------------------------------------------------------
-    objective_terms.append(cfg.w_dev * sum(absowed.values()))
+    # infirmiere must hit their target exactly (w_dev_aide, near-hard); asistente
+    # keep the softer per-hour weight
+    objective_terms.append((cfg.w_dev_aide if is_aide else cfg.w_dev) * sum(absowed.values()))
     if request_pen_terms:
         objective_terms.append(cfg.w_request * sum(request_pen_terms))
     all_tops = list(t4.values()) + list(t8.values())

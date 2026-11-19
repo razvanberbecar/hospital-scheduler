@@ -324,9 +324,14 @@ def validate(inp: ScheduleInput, assignments: list[Assignment]) -> Report:
                     f"{n.name}: totalul de {t.total}h față de ținta lunară de {t.effective_target}h diferă cu "
                     f"{t.owed:+d}h - în afara toleranței de ±{cfg.band}h.", nurse_id=n.id))
         elif t.owed != 0:
+            # infirmiere should land exactly on target (decided 2026-11-19); a gap
+            # left only because the month is too tight stays a warning
+            exact = (" Infirmierele trebuie să aibă exact numărul de ore al lunii; corectează "
+                     "de mână dacă se poate.") if is_aide else ""
             W(Issue("warning", "target_missed",
                     f"{n.name}: nu a atins ținta lunară cu {t.owed:+d}h "
-                    f"(total {t.total}h față de ținta de {t.effective_target}h).", nurse_id=n.id))
+                    f"(total {t.total}h față de ținta de {t.effective_target}h).{exact}",
+                    nurse_id=n.id))
         if not n.is_head:
             minimum, relaxed = night_min[n.id]
             if t.nights < minimum:
